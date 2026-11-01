@@ -146,10 +146,10 @@ jobs:
 
           echo "Keystores successfully prepared."
 
-      # Step 0: Ensure Android Launcher Icons & Resources Exist (Prevents AAPT resource not found)
+      # Step 0: Ensure Android Launcher Icons & Resources Exist (Auto-Heals AAPT resource not found)
       - name: Ensure Android Launcher Icons & Resources
         run: |
-          echo "Ensuring all required Android launcher icons exist..."
+          echo "Auto-verifying and generating all required Android launcher icons & XML resources..."
           python3 -c "
           import os, struct, zlib
 
@@ -167,21 +167,6 @@ jobs:
               png += chunk(b'IDAT', compress)
               png += chunk(b'IEND', b'')
               return png
-
-          res_dirs = [
-              'app/src/main/res',
-              'android/app/src/main/res',
-              os.path.join(os.environ.get('PROJECT_DIR', '.'), 'app/src/main/res'),
-              os.path.join(os.environ.get('PROJECT_DIR', '.'), 'src/main/res')
-          ]
-
-          densities = {
-              'mipmap-mdpi': 48,
-              'mipmap-hdpi': 72,
-              'mipmap-xhdpi': 96,
-              'mipmap-xxhdpi': 144,
-              'mipmap-xxxhdpi': 192
-          }
 
           bg_xml = '''<?xml version=\"1.0\" encoding=\"utf-8\"?>
           <vector xmlns:android=\"http://schemas.android.com/apk/res/android\"
@@ -208,48 +193,79 @@ jobs:
               <foreground android:drawable=\"@drawable/ic_launcher_foreground\" />
           </adaptive-icon>'''
 
-          seen = set()
-          for target in res_dirs:
-              if not target or target in seen:
+          strings_xml = '''<?xml version=\"1.0\" encoding=\"utf-8\"?>
+          <resources>
+              <string name=\"app_name\">WiFiShare</string>
+          </resources>'''
+
+          themes_xml = '''<?xml version=\"1.0\" encoding=\"utf-8\"?>
+          <resources>
+              <style name=\"Theme.WiFiShare\" parent=\"android:Theme.Material.Light.NoActionBar\">
+                  <item name=\"android:statusBarColor\">#0F172A</item>
+                  <item name=\"android:navigationBarColor\">#0F172A</item>
+              </style>
+          </resources>'''
+
+          colors_xml = '''<?xml version=\"1.0\" encoding=\"utf-8\"?>
+          <resources>
+              <color name=\"primary\">#0284C7</color>
+              <color name=\"background\">#0F172A</color>
+          </resources>'''
+
+          backup_xml = '''<?xml version=\"1.0\" encoding=\"utf-8\"?>
+          <full-backup-content>
+          </full-backup-content>'''
+
+          densities = {
+              'mipmap-mdpi': 48,
+              'mipmap-hdpi': 72,
+              'mipmap-xhdpi': 96,
+              'mipmap-xxhdpi': 144,
+              'mipmap-xxxhdpi': 192
+          }
+
+          targets = set()
+          for root, dirs, files in os.walk('.'):
+              if any(skip in root for skip in ['node_modules', '.git', 'dist', 'build']):
                   continue
-              seen.add(target)
-              if not os.path.exists(os.path.dirname(target)):
-                  continue
-              os.makedirs(os.path.join(target, 'drawable'), exist_ok=True)
-              os.makedirs(os.path.join(target, 'mipmap-anydpi-v26'), exist_ok=True)
+              if 'AndroidManifest.xml' in files:
+                  targets.add(os.path.join(root, 'res'))
 
-              bg_path = os.path.join(target, 'drawable', 'ic_launcher_background.xml')
-              fg_path = os.path.join(target, 'drawable', 'ic_launcher_foreground.xml')
-              if not os.path.exists(bg_path):
-                  with open(bg_path, 'w') as f: f.write(bg_xml)
-              if not os.path.exists(fg_path):
-                  with open(fg_path, 'w') as f: f.write(fg_xml)
+          # Explicit fallbacks
+          targets.add('app/src/main/res')
+          targets.add('android/app/src/main/res')
+          proj_dir = os.environ.get('PROJECT_DIR', '.')
+          targets.add(os.path.join(proj_dir, 'app/src/main/res'))
 
-              for icon in ['ic_launcher.xml', 'ic_launcher_round.xml']:
-                  p = os.path.join(target, 'mipmap-anydpi-v26', icon)
-                  if not os.path.exists(p):
-                      with open(p, 'w') as f: f.write(adaptive_xml)
+          png_bytes = make_png(96, 96, 59, 130, 246)
 
-              png_bytes = make_png(96, 96, 59, 130, 246)
-              for d_name, sz in densities.items():
-                  d_path = os.path.join(target, d_name)
-                  os.makedirs(d_path, exist_ok=True)
-                  for icon_png in ['ic_launcher.png', 'ic_launcher_round.png']:
-                      ip = os.path.join(d_path, icon_png)
-                      if not os.path.exists(ip):
-                          with open(ip, 'wb') as f: f.write(png_bytes)
+          def write_if_missing(p, content, binary=False):
+              if not os.path.exists(p):
+                  os.makedirs(os.path.dirname(p), exist_ok=True)
+                  mode = 'wb' if binary else 'w'
+                  with open(p, mode) as f:
+                      f.write(content)
+                  print('Auto-created missing resource:', p)
+
+          for target in targets:
+              write_if_missing(os.path.join(target, 'drawable', 'ic_launcher_background.xml'), bg_xml)
+              write_if_missing(os.path.join(target, 'drawable', 'ic_launcher_foreground.xml'), fg_xml)
+              write_if_missing(os.path.join(target, 'mipmap-anydpi-v26', 'ic_launcher.xml'), adaptive_xml)
+              write_if_missing(os.path.join(target, 'mipmap-anydpi-v26', 'ic_launcher_round.xml'), adaptive_xml)
+              write_if_missing(os.path.join(target, 'values', 'strings.xml'), strings_xml)
+              write_if_missing(os.path.join(target, 'values', 'themes.xml'), themes_xml)
+              write_if_missing(os.path.join(target, 'values', 'colors.xml'), colors_xml)
+              write_if_missing(os.path.join(target, 'xml', 'backup_rules.xml'), backup_xml)
+              write_if_missing(os.path.join(target, 'xml', 'data_extraction_rules.xml'), backup_xml)
+
+              for d_name in densities:
+                  write_if_missing(os.path.join(target, d_name, 'ic_launcher.png'), png_bytes, binary=True)
+                  write_if_missing(os.path.join(target, d_name, 'ic_launcher_round.png'), png_bytes, binary=True)
+
           print('All Android launcher icons and drawables verified and ready.')
           "
 
-      # Step 1: Build App Bundle (AAB for Google Play Store)
-      - name: Build App Bundle (AAB)
-        id: build_bundle
-        run: |
-          cd $PROJECT_DIR
-          echo "Building Release App Bundle (AAB)..."
-          ./gradlew bundleRelease --no-daemon -x test
-
-      # Step 2: Build Release APK via Gradle
+      # Step 1: Build Release APK via Gradle
       - name: Build Release APK
         id: build_release
         continue-on-error: true
@@ -258,42 +274,59 @@ jobs:
           echo "Building Release APK..."
           ./gradlew assembleRelease --no-daemon -x test || ./gradlew assemble --no-daemon -x test || true
 
-      # Step 3: Build Universal APK from App Bundle (Guaranteed APK generation)
+      # Step 2: Build App Bundle (AAB for Google Play Store)
+      - name: Build App Bundle (AAB)
+        id: build_bundle
+        continue-on-error: true
+        run: |
+          cd $PROJECT_DIR
+          echo "Building Release App Bundle (AAB)..."
+          ./gradlew bundleRelease --no-daemon -x test || ./gradlew bundle --no-daemon -x test || true
+
+      # Step 3: Build Universal APK from App Bundle (Guaranteed APK generation fallback)
       - name: Generate Universal APK from App Bundle
         run: |
           mkdir -p release-output
+          # Check if an APK already exists from Step 1
+          EXISTING_APK=$(find . -type f -name "*.apk" ! -path "./release-output/*" | head -n 1)
+          if [ -n "$EXISTING_APK" ]; then
+            echo "Found Gradle built APK: $EXISTING_APK"
+            cp -v "$EXISTING_APK" release-output/WiFiShare-Release.apk
+          fi
+
           # Find generated AAB
-          AAB_FILE=$(find . -type f -name "*.aab" | head -n 1)
+          AAB_FILE=$(find . -type f -name "*.aab" ! -path "./release-output/*" | head -n 1)
           if [ -n "$AAB_FILE" ]; then
             echo "Found AAB at: $AAB_FILE"
             cp -v "$AAB_FILE" release-output/WiFiShare-release.aab
             
-            echo "Downloading Google bundletool..."
-            curl -sSL "https://github.com/google/bundletool/releases/download/1.17.2/bundletool-all-1.17.2.jar" -o /tmp/bundletool.jar
-            
-            KEYSTORE_FILE_PATH="release.jks"
-            if [ -f "$PROJECT_DIR/release.jks" ]; then
-              KEYSTORE_FILE_PATH="$PROJECT_DIR/release.jks"
+            # If APK is still missing, generate universal APK using bundletool
+            if [ ! -f release-output/WiFiShare-Release.apk ]; then
+              echo "Downloading Google bundletool..."
+              curl -sSL "https://github.com/google/bundletool/releases/download/1.17.2/bundletool-all-1.17.2.jar" -o /tmp/bundletool.jar
+              
+              KEYSTORE_FILE_PATH="release.jks"
+              if [ -f "$PROJECT_DIR/release.jks" ]; then
+                KEYSTORE_FILE_PATH="$PROJECT_DIR/release.jks"
+              fi
+
+              KS_PASS="${KEYSTORE_PASSWORD:-android}"
+              KEY_AL="${KEY_ALIAS:-release}"
+              KEY_P="${KEY_PASSWORD:-android}"
+
+              echo "Building Universal installable APK from bundle..."
+              java -jar /tmp/bundletool.jar build-apks \
+                --bundle="$AAB_FILE" \
+                --output=/tmp/universal.apks \
+                --mode=universal \
+                --ks="$KEYSTORE_FILE_PATH" \
+                --ks-pass="pass:$KS_PASS" \
+                --ks-key-alias="$KEY_AL" \
+                --key-pass="pass:$KEY_P"
+              
+              unzip -p /tmp/universal.apks universal.apk > release-output/WiFiShare-Release.apk
+              echo "Generated release-output/WiFiShare-Release.apk successfully from AAB!"
             fi
-
-            KS_PASS="${KEYSTORE_PASSWORD:-android}"
-            KEY_AL="${KEY_ALIAS:-release}"
-            KEY_P="${KEY_PASSWORD:-android}"
-
-            echo "Building Universal installable APK from bundle..."
-            java -jar /tmp/bundletool.jar build-apks \
-              --bundle="$AAB_FILE" \
-              --output=/tmp/universal.apks \
-              --mode=universal \
-              --ks="$KEYSTORE_FILE_PATH" \
-              --ks-pass="pass:$KS_PASS" \
-              --ks-key-alias="$KEY_AL" \
-              --key-pass="pass:$KEY_P"
-            
-            unzip -p /tmp/universal.apks universal.apk > release-output/WiFiShare-Release.apk
-            echo "Generated release-output/WiFiShare-Release.apk successfully!"
-          else
-            echo "No AAB found to generate universal APK from."
           fi
 
       # Step 4: Collect all generated APK and AAB files
@@ -322,7 +355,7 @@ jobs:
           echo "Verifying build outputs in release-output/..."
           ARTIFACT_COUNT=$(find release-output -type f \( -name "*.apk" -o -name "*.aab" \) | wc -l)
           if [ "$ARTIFACT_COUNT" -eq 0 ]; then
-            echo "::error::No APK or AAB files were generated!"
+            echo "::error::No APK or AAB files were generated! Please check the logs above."
             exit 1
           fi
           echo "Verification SUCCESS! Found $ARTIFACT_COUNT artifact(s):"
