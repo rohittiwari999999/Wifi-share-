@@ -41,6 +41,7 @@ export const BrowserReceiverModal: React.FC<BrowserReceiverModalProps> = ({
 
   // Generate QR Code
   useEffect(() => {
+    let isMounted = true;
     QRCode.toDataURL(portalUrl, {
       width: 280,
       margin: 1,
@@ -48,7 +49,12 @@ export const BrowserReceiverModal: React.FC<BrowserReceiverModalProps> = ({
         dark: '#0f172a',
         light: '#ffffff'
       }
-    }).then(setQrDataUrl);
+    }).then((url) => {
+      if (isMounted) setQrDataUrl(url);
+    });
+    return () => {
+      isMounted = false;
+    };
   }, [portalUrl]);
 
   // Session timer

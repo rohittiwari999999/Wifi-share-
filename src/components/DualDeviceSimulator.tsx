@@ -55,22 +55,17 @@ export const DualDeviceSimulator: React.FC<DualDeviceSimulatorProps> = ({
   const transferIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const onLogProtocolRef = useRef(onLogProtocol);
-  useEffect(() => {
-    onLogProtocolRef.current = onLogProtocol;
-  }, [onLogProtocol]);
-
-  // Handle NSD Registration when Device B toggles Receive Mode
-  useEffect(() => {
-    if (isReceiveModeB) {
-      onLogProtocolRef.current({
+  const handleToggleReceiveModeB = (enabled: boolean) => {
+    setIsReceiveModeB(enabled);
+    if (enabled) {
+      onLogProtocol({
         type: 'NSD_REGISTER',
         source: `${deviceBIp}:8945`,
         destination: '224.0.0.251:5353 (mDNS)',
         payloadSummary: `Service registered: _wifishare._tcp. on port 8945 for "${deviceBName}"`
       });
     }
-  }, [isReceiveModeB, deviceBName, deviceBIp]);
+  };
 
   // Handle NSD Discovery from Device A
   const handleStartScan = () => {
@@ -725,7 +720,7 @@ export const DualDeviceSimulator: React.FC<DualDeviceSimulatorProps> = ({
                 <input
                   type="checkbox"
                   checked={isReceiveModeB}
-                  onChange={(e) => setIsReceiveModeB(e.target.checked)}
+                  onChange={(e) => handleToggleReceiveModeB(e.target.checked)}
                   className="sr-only peer"
                 />
                 <div className="w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-sky-600" />
