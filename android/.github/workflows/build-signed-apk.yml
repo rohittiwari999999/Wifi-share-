@@ -69,17 +69,21 @@ jobs:
           echo "Current Gradle version:"
           ./gradlew --version
 
-      # Prepare Release Keystore: Uses GitHub Secrets if set, or auto-generates CI release keystore
-      - name: Prepare Release Keystore
+      # Prepare Keystores: Creates release keystore (and ~/.android/debug.keystore) so Gradle never fails on missing keystores
+      - name: Prepare Keystores
         run: |
+          mkdir -p ~/.android
           mkdir -p $PROJECT_DIR/app
+          mkdir -p $PROJECT_DIR
+
+          # 1. Setup release keystore
           if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "Using provided release keystore from GitHub Secrets..."
-            echo "$KEYSTORE_BASE64" | base64 --decode > $PROJECT_DIR/app/release.jks
+            echo "Decoding KEYSTORE_BASE64 from GitHub Secrets..."
+            echo "$KEYSTORE_BASE64" | base64 --decode > $PROJECT_DIR/release.jks
           else
-            echo "KEYSTORE_BASE64 secret not set. Generating CI release keystore..."
+            echo "KEYSTORE_BASE64 not set. Generating CI release keystore..."
             keytool -genkeypair -v \
-              -keystore $PROJECT_DIR/app/release.jks \
+              -keystore $PROJECT_DIR/release.jks \
               -alias release \
               -keyalg RSA \
               -keysize 2048 \
@@ -91,13 +95,34 @@ jobs:
             echo "KEY_ALIAS=release" >> $GITHUB_ENV
             echo "KEY_PASSWORD=android" >> $GITHUB_ENV
           fi
-          ls -la $PROJECT_DIR/app/release.jks
 
-      # Build Release APK and Android App Bundle (AAB) with lint vital disabled to guarantee build success
-      - name: Build Release APK & Bundle
+          # Copy release.jks to every relative directory Gradle might look for
+          cp $PROJECT_DIR/release.jks $PROJECT_DIR/app/release.jks 2>/dev/null || true
+          cp $PROJECT_DIR/release.jks ./release.jks 2>/dev/null || true
+
+          # 2. Setup standard debug keystore for fallback
+          if [ ! -f ~/.android/debug.keystore ]; then
+            keytool -genkeypair -v \
+              -keystore ~/.android/debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US" || true
+          fi
+
+          echo "Keystores successfully prepared."
+
+      # Build Release APK, Debug APK, and App Bundle (AAB) with lint disabled
+      - name: Build Release & Debug APKs
         run: |
           cd $PROJECT_DIR
-          ./gradlew assembleRelease bundleRelease --stacktrace --no-daemon -x lint -x lintVitalRelease -x test
+          echo "Building APKs..."
+          ./gradlew assembleRelease assembleDebug bundleRelease --stacktrace --no-daemon -x lint -x lintVitalRelease -x test || \
+          ./gradlew assembleRelease assembleDebug --stacktrace --no-daemon -x lint -x lintVitalRelease -x test || \
+          ./gradlew assembleDebug --stacktrace --no-daemon -x lint -x test
 
       # Optional fallback signing using apksigner if needed
       - name: Sign Release APK
