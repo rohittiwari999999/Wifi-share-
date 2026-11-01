@@ -13,6 +13,12 @@ jobs:
   build-and-sign:
     name: Build Signed Release APK & AAB
     runs-on: ubuntu-latest
+    env:
+      KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+      KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+      KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+      KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+      KEYSTORE_FILE: "release.jks"
 
     steps:
       - name: Checkout Code
@@ -37,26 +43,19 @@ jobs:
 
       # 1. Decode Release Keystore from GitHub Secrets (Base64)
       - name: Decode Release Keystore
-        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
-        env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        if: env.KEYSTORE_BASE64 != ''
         run: |
           echo "$KEYSTORE_BASE64" | base64 --decode > app/release.jks
           echo "Keystore successfully decoded to app/release.jks"
 
       # 2. Build Release APK and Android App Bundle (AAB)
       - name: Build Release APK & Bundle
-        env:
-          KEYSTORE_FILE: "release.jks"
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           ./gradlew assembleRelease bundleRelease --stacktrace
 
       # 3. Sign APK using Android apksigner if Keystore is provided via Secrets
       - name: Sign Release APK
-        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        if: env.KEYSTORE_BASE64 != ''
         uses: r0adkll/sign-android-release@v1
         id: sign_apk
         with:
