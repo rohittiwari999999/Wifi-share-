@@ -55,17 +55,22 @@ export const DualDeviceSimulator: React.FC<DualDeviceSimulatorProps> = ({
   const transferIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  const onLogProtocolRef = useRef(onLogProtocol);
+  useEffect(() => {
+    onLogProtocolRef.current = onLogProtocol;
+  }, [onLogProtocol]);
+
   // Handle NSD Registration when Device B toggles Receive Mode
   useEffect(() => {
     if (isReceiveModeB) {
-      onLogProtocol({
+      onLogProtocolRef.current({
         type: 'NSD_REGISTER',
         source: `${deviceBIp}:8945`,
         destination: '224.0.0.251:5353 (mDNS)',
         payloadSummary: `Service registered: _wifishare._tcp. on port 8945 for "${deviceBName}"`
       });
     }
-  }, [isReceiveModeB, deviceBName, deviceBIp, onLogProtocol]);
+  }, [isReceiveModeB, deviceBName, deviceBIp]);
 
   // Handle NSD Discovery from Device A
   const handleStartScan = () => {

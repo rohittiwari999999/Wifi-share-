@@ -67,10 +67,9 @@ jobs:
 
       # 1. Decode Release Keystore from GitHub Secrets (Base64)
       - name: Decode Release Keystore
-        if: env.HAS_KEYSTORE == 'true'
+        if: \${{ secrets.KEYSTORE_BASE64 != '' }}
         env:
           KEYSTORE_BASE64: \${{ secrets.KEYSTORE_BASE64 }}
-          HAS_KEYSTORE: \${{ secrets.KEYSTORE_BASE64 != '' }}
         run: |
           echo "$KEYSTORE_BASE64" | base64 --decode > app/release.jks
           echo "Keystore successfully decoded to app/release.jks"
@@ -87,9 +86,7 @@ jobs:
 
       # 3. Sign APK with official Android apksigner
       - name: Sign Release APK
-        if: env.HAS_KEYSTORE == 'true'
-        env:
-          HAS_KEYSTORE: \${{ secrets.KEYSTORE_BASE64 != '' }}
+        if: \${{ secrets.KEYSTORE_BASE64 != '' }}
         uses: r0adkll/sign-android-release@v1
         id: sign_apk
         with:

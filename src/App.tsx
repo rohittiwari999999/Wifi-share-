@@ -54,14 +54,17 @@ export default function App() {
     }
   ]);
 
-  const handleLogProtocol = (entry: Omit<ProtocolLogEntry, 'id' | 'timestamp'>) => {
-    const newLog: ProtocolLogEntry = {
-      ...entry,
-      id: `log-${Date.now()}-${Math.random()}`,
-      timestamp: Date.now()
-    };
-    setProtocolLogs((prev) => [newLog, ...prev]);
-  };
+  const handleLogProtocol = React.useCallback(
+    (entry: Omit<ProtocolLogEntry, 'id' | 'timestamp'>) => {
+      const newLog: ProtocolLogEntry = {
+        ...entry,
+        id: `log-${Date.now()}-${Math.random()}`,
+        timestamp: Date.now()
+      };
+      setProtocolLogs((prev) => [newLog, ...prev]);
+    },
+    []
+  );
 
   const handleOpenBrowserPortal = (
     token: string,
