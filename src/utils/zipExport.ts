@@ -37,6 +37,19 @@ Native Android application built with Kotlin and Jetpack Compose for direct peer
 3. Allow Gradle to sync dependencies from \`gradle/libs.versions.toml\`.
 4. Connect an Android device (API 26+) or launch an emulator.
 5. Click **Run 'app'**.
+
+## How to Generate Signed APK on GitHub (CI/CD)
+1. Push this repository to GitHub.
+2. In your GitHub repository, go to **Settings > Secrets and variables > Actions**.
+3. Add the following repository secrets:
+   - \`KEYSTORE_BASE64\`: Base64 encoded string of your release keystore (\`base64 -w 0 release.jks\`)
+   - \`KEYSTORE_PASSWORD\`: Your keystore password
+   - \`KEY_ALIAS\`: Your key alias
+   - \`KEY_PASSWORD\`: Your key password
+4. Go to the **Actions** tab on GitHub, click **Build & Sign Android APK / AAB**, and click **Run workflow**.
+5. Once completed, download the signed APK and AAB from the **Artifacts** section!
+6. Pushing a tag like \`v1.0.0\` will automatically publish a GitHub Release with the APK attached.
+
 `
   );
 

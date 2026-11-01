@@ -29,6 +29,7 @@ export const CodebaseExplorer: React.FC<CodebaseExplorerProps> = ({ onExportZip 
     { id: 'transfer', label: 'Ktor Transfer Engine' },
     { id: 'browser', label: 'Browser Receiver' },
     { id: 'core', label: 'Security & SAF' },
+    { id: 'cicd', label: 'GitHub Signed APK' },
     { id: 'test', label: 'Unit Tests' }
   ];
 

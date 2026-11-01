@@ -3,6 +3,7 @@ import { TopNav } from './components/TopNav';
 import { DualDeviceSimulator } from './components/DualDeviceSimulator';
 import { BrowserReceiverModal } from './components/BrowserReceiverModal';
 import { CodebaseExplorer } from './components/CodebaseExplorer';
+import { GitHubSignedApkGuide } from './components/GitHubSignedApkGuide';
 import { ProtocolInspector } from './components/ProtocolInspector';
 import { NetworkTroubleshooter } from './components/NetworkTroubleshooter';
 import { FileTransferItem, ProtocolLogEntry } from './types';
@@ -10,7 +11,7 @@ import { exportAndroidProjectZip } from './utils/zipExport';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<
-    'simulator' | 'browser-portal' | 'codebase' | 'protocol' | 'troubleshoot'
+    'simulator' | 'browser-portal' | 'codebase' | 'github-ci' | 'protocol' | 'troubleshoot'
   >('simulator');
 
   // Active Browser Session (Mode B)
@@ -102,6 +103,8 @@ export default function App() {
         {activeTab === 'codebase' && (
           <CodebaseExplorer onExportZip={exportAndroidProjectZip} />
         )}
+
+        {activeTab === 'github-ci' && <GitHubSignedApkGuide />}
 
         {activeTab === 'protocol' && (
           <ProtocolInspector

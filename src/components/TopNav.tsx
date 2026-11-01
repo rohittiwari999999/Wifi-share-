@@ -2,8 +2,8 @@ import React from 'react';
 import { Download } from 'lucide-react';
 
 interface TopNavProps {
-  activeTab: 'simulator' | 'browser-portal' | 'codebase' | 'protocol' | 'troubleshoot';
-  onTabChange: (tab: 'simulator' | 'browser-portal' | 'codebase' | 'protocol' | 'troubleshoot') => void;
+  activeTab: 'simulator' | 'browser-portal' | 'codebase' | 'github-ci' | 'protocol' | 'troubleshoot';
+  onTabChange: (tab: 'simulator' | 'browser-portal' | 'codebase' | 'github-ci' | 'protocol' | 'troubleshoot') => void;
   onExportProject: () => void;
 }
 
@@ -25,7 +25,7 @@ export const TopNav: React.FC<TopNavProps> = ({
       </div>
 
       {/* Zone 2: 4-5 single-line clean navigation links */}
-      <nav className="hidden lg:flex items-center gap-7 text-sm font-medium text-slate-300">
+      <nav className="hidden lg:flex items-center gap-6 text-sm font-medium text-slate-300">
         <button
           onClick={() => onTabChange('simulator')}
           className={`hover:text-white transition-colors whitespace-nowrap shrink-0 py-1 ${
@@ -54,7 +54,17 @@ export const TopNav: React.FC<TopNavProps> = ({
               : 'text-slate-400'
           }`}
         >
-          Android Kotlin Codebase
+          Android Codebase
+        </button>
+        <button
+          onClick={() => onTabChange('github-ci')}
+          className={`hover:text-white transition-colors whitespace-nowrap shrink-0 py-1 ${
+            activeTab === 'github-ci'
+              ? 'text-sky-400 font-semibold border-b-2 border-sky-400'
+              : 'text-slate-400'
+          }`}
+        >
+          GitHub Signed APK
         </button>
         <button
           onClick={() => onTabChange('protocol')}
