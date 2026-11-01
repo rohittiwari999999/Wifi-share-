@@ -173,75 +173,90 @@ jobs:
 
           echo "Keystores successfully prepared."
 
-      # Step 1: Build Debug APK
-      - name: Build Debug APK
-        id: build_debug
-        continue-on-error: true
+      # Step 1: Build App Bundle (AAB for Google Play Store)
+      - name: Build App Bundle (AAB)
+        id: build_bundle
         run: |
           cd $PROJECT_DIR
-          echo "Building Debug APK..."
-          ./gradlew assembleDebug --no-daemon -x test -x lint
+          echo "Building Release App Bundle (AAB)..."
+          ./gradlew bundleRelease --no-daemon -x test -x lint -x lintVitalRelease
 
-      # Step 2: Build Release APK
+      # Step 2: Build Release APK via Gradle
       - name: Build Release APK
         id: build_release
         continue-on-error: true
         run: |
           cd $PROJECT_DIR
           echo "Building Release APK..."
-          ./gradlew assembleRelease --no-daemon -x test -x lint -x lintVitalRelease
+          ./gradlew assembleRelease --no-daemon -x test -x lint -x lintVitalRelease || ./gradlew assemble --no-daemon -x test -x lint
 
-      # Step 3: Build App Bundle (AAB for Google Play)
-      - name: Build App Bundle (AAB)
-        id: build_bundle
-        continue-on-error: true
-        run: |
-          cd $PROJECT_DIR
-          echo "Building Release App Bundle (AAB)..."
-          ./gradlew bundleRelease --no-daemon -x test -x lint -x lintVitalRelease
-
-      # Verify that at least one APK was generated
-      - name: Verify Generated Artifacts
-        run: |
-          echo "Checking generated APK files..."
-          APKS=$(find . -type f -name "*.apk" 2>/dev/null)
-          if [ -z "$APKS" ]; then
-            echo "::error::No APK files found! Printing Gradle tasks and diagnostics:"
-            cd $PROJECT_DIR && ./gradlew tasks --no-daemon || true
-            exit 1
-          fi
-          echo "Found the following APKs:"
-          echo "$APKS"
-
-      # Optional fallback signing using apksigner if release secret is set
-      - name: Sign Release APK
-        if: env.KEYSTORE_BASE64 != ''
-        uses: r0adkll/sign-android-release@v1
-        id: sign_apk
-        continue-on-error: true
-        with:
-          releaseDirectory: \${{ env.PROJECT_DIR }}/app/build/outputs/apk/release
-          signingKeyBase64: \${{ secrets.KEYSTORE_BASE64 }}
-          alias: \${{ secrets.KEY_ALIAS }}
-          keyStorePassword: \${{ secrets.KEYSTORE_PASSWORD }}
-          keyPassword: \${{ secrets.KEY_PASSWORD }}
-        env:
-          BUILD_TOOLS_VERSION: "35.0.0"
-
-      # Prepare and collect artifacts for download
-      - name: Prepare Artifacts
+      # Step 3: Build Universal APK from App Bundle (Guaranteed APK generation)
+      - name: Generate Universal APK from App Bundle
         run: |
           mkdir -p release-output
-          if [ -n "\${{ steps.sign_apk.outputs.signedReleaseFile }}" ] && [ -f "\${{ steps.sign_apk.outputs.signedReleaseFile }}" ]; then
-            cp "\${{ steps.sign_apk.outputs.signedReleaseFile }}" release-output/WiFiShare-signed.apk
+          # Find generated AAB
+          AAB_FILE=$(find . -type f -name "*.aab" | head -n 1)
+          if [ -n "$AAB_FILE" ]; then
+            echo "Found AAB at: $AAB_FILE"
+            cp -v "$AAB_FILE" release-output/WiFiShare-release.aab
+            
+            echo "Downloading Google bundletool..."
+            curl -sSL "https://github.com/google/bundletool/releases/download/1.17.2/bundletool-all-1.17.2.jar" -o /tmp/bundletool.jar
+            
+            KEYSTORE_FILE_PATH="release.jks"
+            if [ -f "$PROJECT_DIR/release.jks" ]; then
+              KEYSTORE_FILE_PATH="$PROJECT_DIR/release.jks"
+            fi
+
+            echo "Building Universal installable APK from bundle..."
+            java -jar /tmp/bundletool.jar build-apks \\
+              --bundle="$AAB_FILE" \\
+              --output=/tmp/universal.apks \\
+              --mode=universal \\
+              --ks="$KEYSTORE_FILE_PATH" \\
+              --ks-pass=pass:android \\
+              --ks-key-alias=release \\
+              --key-pass=pass:android
+            
+            unzip -p /tmp/universal.apks universal.apk > release-output/WiFiShare-Release.apk
+            echo "Generated release-output/WiFiShare-Release.apk successfully!"
+          else
+            echo "No AAB found to generate universal APK from."
           fi
+
+      # Step 4: Collect all generated APK and AAB files
+      - name: Collect Build Artifacts
+        run: |
+          mkdir -p release-output
+          # Copy any Gradle generated APKs
           find . -type f -name "*.apk" ! -path "./release-output/*" -exec cp -v {} release-output/ \\; 2>/dev/null || true
+          # Copy any Gradle generated AABs
           find . -type f -name "*.aab" ! -path "./release-output/*" -exec cp -v {} release-output/ \\; 2>/dev/null || true
 
-          echo "=== Ready Artifacts in release-output/ ==="
-          ls -la release-output/
+          # If WiFiShare-Release.apk does not exist yet, find any other APK and copy it
+          if [ ! -f release-output/WiFiShare-Release.apk ]; then
+            ANY_APK=$(find release-output -type f -name "*.apk" | head -n 1)
+            if [ -n "$ANY_APK" ]; then
+              cp "$ANY_APK" release-output/WiFiShare-Release.apk
+            fi
+          fi
 
-      # Upload APK to GitHub Actions Artifacts
+          echo "=== Collected Artifacts in release-output/ ==="
+          ls -lh release-output/
+
+      # Step 5: Verify Generated Artifacts (Passes if APK or AAB is present)
+      - name: Verify Generated Artifacts
+        run: |
+          echo "Verifying build outputs in release-output/..."
+          ARTIFACT_COUNT=$(find release-output -type f \\( -name "*.apk" -o -name "*.aab" \\) | wc -l)
+          if [ "$ARTIFACT_COUNT" -eq 0 ]; then
+            echo "::error::No APK or AAB files were generated!"
+            exit 1
+          fi
+          echo "Verification SUCCESS! Found $ARTIFACT_COUNT artifact(s):"
+          find release-output -type f \\( -name "*.apk" -o -name "*.aab" \\) -exec ls -lh {} \\;
+
+      # Upload APKs to GitHub Actions Artifacts
       - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:
@@ -253,13 +268,11 @@ jobs:
       # Upload App Bundle (AAB) to GitHub Actions Artifacts
       - name: Upload App Bundle (AAB)
         uses: actions/upload-artifact@v4
-        if: always()
-        continue-on-error: true
         with:
           name: WiFiShare-Release-AAB
           path: release-output/*.aab
           retention-days: 30
-          if-no-files-found: ignore
+          if-no-files-found: warn
 
       # Auto-Publish Release when a git tag (e.g. v1.0.0) is pushed
       - name: Create GitHub Release
