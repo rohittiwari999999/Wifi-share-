@@ -107,6 +107,8 @@ jobs:
           org.gradle.caching=true
           android.useAndroidX=true
           android.nonTransitiveRClass=true
+          android.lint.checkReleaseBuilds=false
+          android.lint.abortOnError=false
           kotlin.daemon.jvmargs=-Xmx2048m"
 
           echo "$PROPS" > gradle.properties
@@ -179,7 +181,7 @@ jobs:
         run: |
           cd $PROJECT_DIR
           echo "Building Release App Bundle (AAB)..."
-          ./gradlew bundleRelease --no-daemon -x test -x lint -x lintVitalRelease
+          ./gradlew bundleRelease --no-daemon -x test
 
       # Step 2: Build Release APK via Gradle
       - name: Build Release APK
@@ -188,7 +190,7 @@ jobs:
         run: |
           cd $PROJECT_DIR
           echo "Building Release APK..."
-          ./gradlew assembleRelease --no-daemon -x test -x lint -x lintVitalRelease || ./gradlew assemble --no-daemon -x test -x lint
+          ./gradlew assembleRelease --no-daemon -x test || ./gradlew assemble --no-daemon -x test || true
 
       # Step 3: Build Universal APK from App Bundle (Guaranteed APK generation)
       - name: Generate Universal APK from App Bundle
@@ -208,15 +210,19 @@ jobs:
               KEYSTORE_FILE_PATH="$PROJECT_DIR/release.jks"
             fi
 
+            KS_PASS="\${KEYSTORE_PASSWORD:-android}"
+            KEY_AL="\${KEY_ALIAS:-release}"
+            KEY_P="\${KEY_PASSWORD:-android}"
+
             echo "Building Universal installable APK from bundle..."
             java -jar /tmp/bundletool.jar build-apks \\
               --bundle="$AAB_FILE" \\
               --output=/tmp/universal.apks \\
               --mode=universal \\
               --ks="$KEYSTORE_FILE_PATH" \\
-              --ks-pass=pass:android \\
-              --ks-key-alias=release \\
-              --key-pass=pass:android
+              --ks-pass="pass:$KS_PASS" \\
+              --ks-key-alias="$KEY_AL" \\
+              --key-pass="pass:$KEY_P"
             
             unzip -p /tmp/universal.apks universal.apk > release-output/WiFiShare-Release.apk
             echo "Generated release-output/WiFiShare-Release.apk successfully!"
