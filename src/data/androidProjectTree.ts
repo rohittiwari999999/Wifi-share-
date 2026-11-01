@@ -198,7 +198,7 @@ if [ ! -r "$CLASSPATH" ]; then
         exec gradle "$@"
     else
         mkdir -p "$APP_HOME/gradle/wrapper"
-        curl -sSL "https://raw.githubusercontent.com/gradle/gradle/v8.7.0/gradle/wrapper/gradle-wrapper.jar" -o "$CLASSPATH" 2>/dev/null || true
+        curl -sSL "https://raw.githubusercontent.com/gradle/gradle/v8.10.2/gradle/wrapper/gradle-wrapper.jar" -o "$CLASSPATH" 2>/dev/null || true
     fi
 fi
 

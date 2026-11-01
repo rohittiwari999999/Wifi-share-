@@ -85,20 +85,22 @@ jobs:
             echo "Falling back to Root (.)"
           fi
 
-      # Ensure gradlew exists, is executable, and upgraded to Gradle 8.10.2 (AGP 8.8.0 requirement)
-      - name: Setup & Upgrade Gradle Wrapper to 8.10.2
+      # Automatically patch any gradle-wrapper.properties across the whole repo to 8.10.2
+      # This fixes: "Minimum supported Gradle version is 8.10.2. Current version is 8.7"
+      - name: Upgrade Gradle Wrapper to 8.10.2
         run: |
+          echo "Scanning and updating all gradle-wrapper.properties to Gradle 8.10.2..."
+          find . -name "gradle-wrapper.properties" -exec sed -i 's/gradle-[0-9.]\\+-\\(bin\\|all\\)\\.zip/gradle-8.10.2-bin.zip/g' {} +
+          find . -name "gradle-wrapper.properties" -exec echo "Updated file {}:" \\; -exec cat {} \\;
           cd $PROJECT_DIR
-          # Auto-upgrade gradle-wrapper.properties to 8.10.2 in case repo had an older version
-          if [ -f "gradle/wrapper/gradle-wrapper.properties" ]; then
-            echo "Upgrading existing gradle-wrapper.properties to 8.10.2..."
-            sed -i 's/gradle-[0-9.]\+-\(bin\|all\)\.zip/gradle-8.10.2-bin.zip/g' gradle/wrapper/gradle-wrapper.properties
-            cat gradle/wrapper/gradle-wrapper.properties
+          if [ ! -f "gradlew" ]; then
+            echo "gradlew not found in $PROJECT_DIR; generating Gradle wrapper..."
+            gradle wrapper --gradle-version 8.10.2 --distribution-type bin
+          else
+            gradle wrapper --gradle-version 8.10.2 --distribution-type bin || true
           fi
-          # Ensure gradlew is generated with 8.10.2
-          gradle wrapper --gradle-version 8.10.2 --distribution-type bin
           chmod +x gradlew
-          echo "Verified Gradle wrapper version:"
+          echo "Current Gradle version:"
           ./gradlew --version
 
       # 1. Decode Release Keystore from GitHub Secrets if available

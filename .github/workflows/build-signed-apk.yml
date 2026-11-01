@@ -36,7 +36,7 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.7'
+          gradle-version: '8.10.2'
 
       # Auto-detect whether Android project is in root or in android/ subdirectory
       - name: Detect Android Project Directory
@@ -53,16 +53,23 @@ jobs:
             echo "Falling back to Root (.)"
           fi
 
-      # Ensure gradlew exists and is executable
-      - name: Ensure Gradle Wrapper Executable
+      # Automatically patch any gradle-wrapper.properties across the whole repo to 8.10.2
+      # This fixes: "Minimum supported Gradle version is 8.10.2. Current version is 8.7"
+      - name: Upgrade Gradle Wrapper to 8.10.2
         run: |
+          echo "Scanning and updating all gradle-wrapper.properties to Gradle 8.10.2..."
+          find . -name "gradle-wrapper.properties" -exec sed -i 's/gradle-[0-9.]\+-\(bin\|all\)\.zip/gradle-8.10.2-bin.zip/g' {} +
+          find . -name "gradle-wrapper.properties" -exec echo "Updated file {}:" \; -exec cat {} \;
           cd $PROJECT_DIR
           if [ ! -f "gradlew" ]; then
             echo "gradlew not found in $PROJECT_DIR; generating Gradle wrapper..."
-            gradle wrapper --gradle-version 8.7
+            gradle wrapper --gradle-version 8.10.2 --distribution-type bin
+          else
+            gradle wrapper --gradle-version 8.10.2 --distribution-type bin || true
           fi
           chmod +x gradlew
-          ls -la gradlew
+          echo "Current Gradle version:"
+          ./gradlew --version
 
       # 1. Decode Release Keystore from GitHub Secrets if available
       - name: Decode Release Keystore
