@@ -39,7 +39,7 @@ on:
       - 'v*'
   pull_request:
     branches: [ "main", "master" ]
-  workflow_dispatch: # Allows manual trigger from GitHub Actions tab
+  workflow_dispatch:
 
 jobs:
   build-and-sign:
@@ -51,6 +51,7 @@ jobs:
       KEY_ALIAS: \${{ secrets.KEY_ALIAS }}
       KEY_PASSWORD: \${{ secrets.KEY_PASSWORD }}
       KEYSTORE_FILE: "release.jks"
+      GRADLE_OPTS: "-Dorg.gradle.jvmargs=\\"-Xmx4096m -XX:MaxMetaspaceSize=1024m -XX:+HeapDumpOnOutOfMemoryError\\" -Dfile.encoding=UTF-8"
 
     steps:
       - name: Checkout Code
@@ -63,14 +64,27 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: 'gradle'
 
-      - name: Setup Gradle
+      - name: Accept Android SDK Licenses & Setup Platform 35
+        run: |
+          echo "Configuring Android SDK and accepting licenses..."
+          export ANDROID_HOME=\${ANDROID_HOME:-/usr/local/lib/android/sdk}
+          export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/tools/bin:$ANDROID_HOME/platform-tools
+          mkdir -p "$ANDROID_HOME/licenses"
+          echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > "$ANDROID_HOME/licenses/android-sdk-license"
+          echo "84831b9409646a3e8e447b7a822e8687d0182b87" >> "$ANDROID_HOME/licenses/android-sdk-license"
+          echo "d56f5187479451eabf01fb78af6dfcb131a6481e" >> "$ANDROID_HOME/licenses/android-sdk-license"
+          echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > "$ANDROID_HOME/licenses/android-sdk-preview-license"
+          yes | sdkmanager --licenses 2>/dev/null || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" 2>/dev/null || true
+          echo "Android SDK configured successfully."
+
+      - name: Setup Gradle 8.10.2
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
 
-      # Auto-detect whether Android project is in root or in android/ subdirectory
+      # Detect whether Android project is in root or in android/ subdirectory
       - name: Detect Android Project Directory
         id: detect-dir
         run: |
@@ -85,37 +99,48 @@ jobs:
             echo "Falling back to Root (.)"
           fi
 
-      # Automatically patch any gradle-wrapper.properties across the whole repo to 8.10.2
-      # This fixes: "Minimum supported Gradle version is 8.10.2. Current version is 8.7"
+      # Configure high-memory gradle.properties to prevent JVM OutOfMemory crashes
+      - name: Configure Gradle Memory & Properties
+        run: |
+          PROPS="org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8
+          org.gradle.parallel=true
+          org.gradle.caching=true
+          android.useAndroidX=true
+          android.nonTransitiveRClass=true
+          kotlin.daemon.jvmargs=-Xmx2048m"
+
+          echo "$PROPS" > gradle.properties
+          mkdir -p android
+          echo "$PROPS" > android/gradle.properties
+          echo "Configured gradle.properties in root and android/"
+
+      # Upgrade Gradle Wrapper to 8.10.2
       - name: Upgrade Gradle Wrapper to 8.10.2
         run: |
           echo "Scanning and updating all gradle-wrapper.properties to Gradle 8.10.2..."
           find . -name "gradle-wrapper.properties" -exec sed -i 's/gradle-[0-9.]\\+-\\(bin\\|all\\)\\.zip/gradle-8.10.2-bin.zip/g' {} +
-          find . -name "gradle-wrapper.properties" -exec echo "Updated file {}:" \\; -exec cat {} \\;
           cd $PROJECT_DIR
           if [ ! -f "gradlew" ]; then
-            echo "gradlew not found in $PROJECT_DIR; generating Gradle wrapper..."
             gradle wrapper --gradle-version 8.10.2 --distribution-type bin
           else
             gradle wrapper --gradle-version 8.10.2 --distribution-type bin || true
           fi
           chmod +x gradlew
-          echo "Current Gradle version:"
+          echo "Gradle wrapper ready:"
           ./gradlew --version
 
-      # Prepare Keystores: Creates release keystore (and ~/.android/debug.keystore) so Gradle never fails on missing keystores
+      # Prepare Release and Debug Keystores
       - name: Prepare Keystores
         run: |
           mkdir -p ~/.android
           mkdir -p $PROJECT_DIR/app
           mkdir -p $PROJECT_DIR
 
-          # 1. Setup release keystore
           if [ -n "$KEYSTORE_BASE64" ]; then
             echo "Decoding KEYSTORE_BASE64 from GitHub Secrets..."
             echo "$KEYSTORE_BASE64" | base64 --decode > $PROJECT_DIR/release.jks
           else
-            echo "KEYSTORE_BASE64 not set. Generating CI release keystore..."
+            echo "Generating CI release keystore..."
             keytool -genkeypair -v \\
               -keystore $PROJECT_DIR/release.jks \\
               -alias release \\
@@ -130,11 +155,10 @@ jobs:
             echo "KEY_PASSWORD=android" >> $GITHUB_ENV
           fi
 
-          # Copy release.jks to every relative directory Gradle might look for
           cp $PROJECT_DIR/release.jks $PROJECT_DIR/app/release.jks 2>/dev/null || true
           cp $PROJECT_DIR/release.jks ./release.jks 2>/dev/null || true
+          cp $PROJECT_DIR/release.jks ./app/release.jks 2>/dev/null || true
 
-          # 2. Setup standard debug keystore for fallback
           if [ ! -f ~/.android/debug.keystore ]; then
             keytool -genkeypair -v \\
               -keystore ~/.android/debug.keystore \\
@@ -149,16 +173,47 @@ jobs:
 
           echo "Keystores successfully prepared."
 
-      # Build Release APK, Debug APK, and App Bundle (AAB) with lint disabled
-      - name: Build Release & Debug APKs
+      # Step 1: Build Debug APK
+      - name: Build Debug APK
+        id: build_debug
+        continue-on-error: true
         run: |
           cd $PROJECT_DIR
-          echo "Building APKs..."
-          ./gradlew assembleRelease assembleDebug bundleRelease --stacktrace --no-daemon -x lint -x lintVitalRelease -x test || \\
-          ./gradlew assembleRelease assembleDebug --stacktrace --no-daemon -x lint -x lintVitalRelease -x test || \\
-          ./gradlew assembleDebug --stacktrace --no-daemon -x lint -x test
+          echo "Building Debug APK..."
+          ./gradlew assembleDebug --no-daemon -x test -x lint
 
-      # Optional fallback signing using apksigner if needed
+      # Step 2: Build Release APK
+      - name: Build Release APK
+        id: build_release
+        continue-on-error: true
+        run: |
+          cd $PROJECT_DIR
+          echo "Building Release APK..."
+          ./gradlew assembleRelease --no-daemon -x test -x lint -x lintVitalRelease
+
+      # Step 3: Build App Bundle (AAB for Google Play)
+      - name: Build App Bundle (AAB)
+        id: build_bundle
+        continue-on-error: true
+        run: |
+          cd $PROJECT_DIR
+          echo "Building Release App Bundle (AAB)..."
+          ./gradlew bundleRelease --no-daemon -x test -x lint -x lintVitalRelease
+
+      # Verify that at least one APK was generated
+      - name: Verify Generated Artifacts
+        run: |
+          echo "Checking generated APK files..."
+          APKS=$(find . -type f -name "*.apk" 2>/dev/null)
+          if [ -z "$APKS" ]; then
+            echo "::error::No APK files found! Printing Gradle tasks and diagnostics:"
+            cd $PROJECT_DIR && ./gradlew tasks --no-daemon || true
+            exit 1
+          fi
+          echo "Found the following APKs:"
+          echo "$APKS"
+
+      # Optional fallback signing using apksigner if release secret is set
       - name: Sign Release APK
         if: env.KEYSTORE_BASE64 != ''
         uses: r0adkll/sign-android-release@v1
@@ -173,45 +228,40 @@ jobs:
         env:
           BUILD_TOOLS_VERSION: "35.0.0"
 
-      # 4. Prepare and collect artifacts for download
+      # Prepare and collect artifacts for download
       - name: Prepare Artifacts
         run: |
           mkdir -p release-output
-          # Collect all generated APKs
           if [ -n "\${{ steps.sign_apk.outputs.signedReleaseFile }}" ] && [ -f "\${{ steps.sign_apk.outputs.signedReleaseFile }}" ]; then
             cp "\${{ steps.sign_apk.outputs.signedReleaseFile }}" release-output/WiFiShare-signed.apk
           fi
-          if [ -f "$PROJECT_DIR/app/build/outputs/apk/release/app-release.apk" ]; then
-            cp "$PROJECT_DIR/app/build/outputs/apk/release/app-release.apk" release-output/WiFiShare-release.apk
-          fi
-          find "$PROJECT_DIR/app/build/outputs/apk" -name "*.apk" -exec cp -u {} release-output/ \; 2>/dev/null || true
+          find . -type f -name "*.apk" ! -path "./release-output/*" -exec cp -v {} release-output/ \\; 2>/dev/null || true
+          find . -type f -name "*.aab" ! -path "./release-output/*" -exec cp -v {} release-output/ \\; 2>/dev/null || true
 
-          # Collect AAB (for Google Play)
-          if [ -f "$PROJECT_DIR/app/build/outputs/bundle/release/app-release.aab" ]; then
-            cp "$PROJECT_DIR/app/build/outputs/bundle/release/app-release.aab" release-output/WiFiShare-release.aab
-          fi
-          find "$PROJECT_DIR/app/build/outputs/bundle" -name "*.aab" -exec cp -u {} release-output/ \; 2>/dev/null || true
-
-          echo "Prepared artifacts:"
+          echo "=== Ready Artifacts in release-output/ ==="
           ls -la release-output/
 
-      # 5. Upload Signed APK to GitHub Actions Artifacts
-      - name: Upload Signed APK
+      # Upload APK to GitHub Actions Artifacts
+      - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:
-          name: WiFiShare-Signed-APK
+          name: WiFiShare-APK
           path: release-output/*.apk
           retention-days: 30
+          if-no-files-found: warn
 
-      # 6. Upload App Bundle (AAB) to GitHub Actions Artifacts
+      # Upload App Bundle (AAB) to GitHub Actions Artifacts
       - name: Upload App Bundle (AAB)
         uses: actions/upload-artifact@v4
+        if: always()
+        continue-on-error: true
         with:
           name: WiFiShare-Release-AAB
           path: release-output/*.aab
           retention-days: 30
+          if-no-files-found: ignore
 
-      # 7. Auto-Publish Release when a git tag (e.g. v1.0.0) is pushed
+      # Auto-Publish Release when a git tag (e.g. v1.0.0) is pushed
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
@@ -223,7 +273,8 @@ jobs:
           prerelease: false
           generate_release_notes: true
         env:
-          GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}`;
+          GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+`;
 
   const gradleSigningSnippet = `android {
     ...

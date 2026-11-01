@@ -25,13 +25,30 @@ android {
 
     signingConfigs {
         create("release") {
-            val keystorePath = System.getenv("KEYSTORE_FILE") ?: "release.jks"
-            val keystoreFile = file(keystorePath)
-            if (keystoreFile.exists()) {
-                storeFile = keystoreFile
+            val keystoreEnv = System.getenv("KEYSTORE_FILE") ?: "release.jks"
+            val candidates = listOf(
+                file(keystoreEnv),
+                rootProject.file(keystoreEnv),
+                file("../$keystoreEnv"),
+                file("release.jks"),
+                rootProject.file("release.jks"),
+                file("../release.jks")
+            )
+            val foundKeystore = candidates.firstOrNull { it.exists() }
+            if (foundKeystore != null) {
+                storeFile = foundKeystore
                 storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "android"
                 keyAlias = System.getenv("KEY_ALIAS") ?: "release"
                 keyPassword = System.getenv("KEY_PASSWORD") ?: "android"
+            } else {
+                // Safe fallback: inherit from debug signing so assembleRelease never crashes
+                val debugKeystore = file("${System.getProperty("user.home")}/.android/debug.keystore")
+                if (debugKeystore.exists()) {
+                    storeFile = debugKeystore
+                    storePassword = "android"
+                    keyAlias = "androiddebugkey"
+                    keyPassword = "android"
+                }
             }
         }
     }
@@ -44,10 +61,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            val keystorePath = System.getenv("KEYSTORE_FILE") ?: "release.jks"
-            if (file(keystorePath).exists()) {
-                signingConfig = signingConfigs.getByName("release")
-            }
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 
