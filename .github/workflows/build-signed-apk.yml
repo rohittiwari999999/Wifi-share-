@@ -54,7 +54,7 @@ jobs:
 
       # Detect whether Android project is in root or in android/ subdirectory
       - name: Detect Android Project Directory
-      	id: detect-dir
+        id: detect-dir
         run: |
           if [ -f "build.gradle.kts" ] || [ -f "build.gradle" ]; then
             echo "PROJECT_DIR=." >> $GITHUB_ENV
