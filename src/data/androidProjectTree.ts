@@ -3,7 +3,7 @@ export interface AndroidFileRecord {
   category: 'config' | 'manifest' | 'core' | 'data' | 'discovery' | 'transfer' | 'browser' | 'ui' | 'test' | 'cicd';
   name: string;
   description: string;
-  language: 'kotlin' | 'groovy' | 'xml' | 'toml' | 'yaml';
+  language: 'kotlin' | 'groovy' | 'xml' | 'toml' | 'yaml' | 'properties' | 'shell';
   content: string;
 }
 
@@ -27,6 +27,7 @@ on:
 
 jobs:
   build-and-sign:
+    name: Build Signed Release APK & AAB
     runs-on: ubuntu-latest
     env:
       KEYSTORE_BASE64: \${{ secrets.KEYSTORE_BASE64 }}
@@ -48,30 +49,58 @@ jobs:
           distribution: 'temurin'
           cache: 'gradle'
 
-      - name: Make Gradle Wrapper Executable
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      # Auto-detect whether Android project is in root or in android/ subdirectory
+      - name: Detect Android Project Directory
+        id: detect-dir
         run: |
-          if [ -f "gradlew" ]; then
-            chmod +x gradlew
+          if [ -f "build.gradle.kts" ] || [ -f "build.gradle" ]; then
+            echo "PROJECT_DIR=." >> $GITHUB_ENV
+            echo "Selected project directory: Root (.)"
+          elif [ -f "android/build.gradle.kts" ] || [ -f "android/build.gradle" ]; then
+            echo "PROJECT_DIR=android" >> $GITHUB_ENV
+            echo "Selected project directory: android/"
+          else
+            echo "PROJECT_DIR=." >> $GITHUB_ENV
+            echo "Falling back to Root (.)"
           fi
 
+      # Ensure gradlew exists and is executable
+      - name: Ensure Gradle Wrapper Executable
+        run: |
+          cd $PROJECT_DIR
+          if [ ! -f "gradlew" ]; then
+            echo "gradlew not found in $PROJECT_DIR; generating Gradle wrapper..."
+            gradle wrapper --gradle-version 8.7
+          fi
+          chmod +x gradlew
+          ls -la gradlew
+
+      # 1. Decode Release Keystore from GitHub Secrets if available
       - name: Decode Release Keystore
         if: env.KEYSTORE_BASE64 != ''
         run: |
-          echo "$KEYSTORE_BASE64" | base64 --decode > app/release.jks
-          echo "Keystore successfully decoded to app/release.jks"
+          mkdir -p $PROJECT_DIR/app
+          echo "$KEYSTORE_BASE64" | base64 --decode > $PROJECT_DIR/app/release.jks
+          echo "Keystore successfully decoded to $PROJECT_DIR/app/release.jks"
 
       # 2. Build Release APK and Android App Bundle (AAB)
       - name: Build Release APK & Bundle
         run: |
+          cd $PROJECT_DIR
           ./gradlew assembleRelease bundleRelease --stacktrace
 
-      # 3. Sign APK using Android apksigner if Keystore is provided via Secrets
+      # 3. Sign APK using r0adkll/sign-android-release if Keystore secret is provided
       - name: Sign Release APK
         if: env.KEYSTORE_BASE64 != ''
         uses: r0adkll/sign-android-release@v1
         id: sign_apk
         with:
-          releaseDirectory: app/build/outputs/apk/release
+          releaseDirectory: \${{ env.PROJECT_DIR }}/app/build/outputs/apk/release
           signingKeyBase64: \${{ secrets.KEYSTORE_BASE64 }}
           alias: \${{ secrets.KEY_ALIAS }}
           keyStorePassword: \${{ secrets.KEYSTORE_PASSWORD }}
@@ -79,21 +108,29 @@ jobs:
         env:
           BUILD_TOOLS_VERSION: "35.0.0"
 
+      # 4. Prepare and collect artifacts for download
       - name: Prepare Artifacts
         run: |
           mkdir -p release-output
-          if [ -f "\${{ steps.sign_apk.outputs.signedReleaseFile }}" ]; then
+          # Collect all generated APKs
+          if [ -n "\${{ steps.sign_apk.outputs.signedReleaseFile }}" ] && [ -f "\${{ steps.sign_apk.outputs.signedReleaseFile }}" ]; then
             cp "\${{ steps.sign_apk.outputs.signedReleaseFile }}" release-output/WiFiShare-signed.apk
-          elif [ -f "app/build/outputs/apk/release/app-release.apk" ]; then
-            cp app/build/outputs/apk/release/app-release.apk release-output/WiFiShare-release.apk
-          else
-            cp app/build/outputs/apk/*/*.apk release-output/ 2>/dev/null || true
           fi
-
-          if [ -f "app/build/outputs/bundle/release/app-release.aab" ]; then
-            cp app/build/outputs/bundle/release/app-release.aab release-output/WiFiShare-release.aab
+          if [ -f "$PROJECT_DIR/app/build/outputs/apk/release/app-release.apk" ]; then
+            cp "$PROJECT_DIR/app/build/outputs/apk/release/app-release.apk" release-output/WiFiShare-release.apk
           fi
+          find "$PROJECT_DIR/app/build/outputs/apk" -name "*.apk" -exec cp -u {} release-output/ \; 2>/dev/null || true
 
+          # Collect AAB (for Google Play)
+          if [ -f "$PROJECT_DIR/app/build/outputs/bundle/release/app-release.aab" ]; then
+            cp "$PROJECT_DIR/app/build/outputs/bundle/release/app-release.aab" release-output/WiFiShare-release.aab
+          fi
+          find "$PROJECT_DIR/app/build/outputs/bundle" -name "*.aab" -exec cp -u {} release-output/ \; 2>/dev/null || true
+
+          echo "Prepared artifacts:"
+          ls -la release-output/
+
+      # 5. Upload Signed APK to GitHub Actions Artifacts
       - name: Upload Signed APK
         uses: actions/upload-artifact@v4
         with:
@@ -101,6 +138,7 @@ jobs:
           path: release-output/*.apk
           retention-days: 30
 
+      # 6. Upload App Bundle (AAB) to GitHub Actions Artifacts
       - name: Upload App Bundle (AAB)
         uses: actions/upload-artifact@v4
         with:
@@ -108,6 +146,7 @@ jobs:
           path: release-output/*.aab
           retention-days: 30
 
+      # 7. Auto-Publish Release when a git tag (e.g. v1.0.0) is pushed
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
@@ -120,6 +159,59 @@ jobs:
           generate_release_notes: true
         env:
           GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}`
+  },
+  {
+    path: 'gradlew',
+    category: 'config',
+    name: 'gradlew',
+    description: 'POSIX Gradle wrapper script to bootstrap build on Linux/macOS and GitHub Actions',
+    language: 'shell',
+    content: `#!/bin/sh
+PRG="$0"
+while [ -h "$PRG" ] ; do
+    ls=\`ls -ld "$PRG"\`
+    link=\`expr "$ls" : '.*-> \\(.*\\)$'\`
+    if expr "$link" : '/.*' > /dev/null; then
+        PRG="$link"
+    else
+        PRG=\`dirname "$PRG"\`"/$link"
+    fi
+done
+SAVED="\`pwd\`"
+cd "\`dirname \\"$PRG\\"\`" >/dev/null
+APP_HOME="\`pwd -P\`"
+cd "$SAVED" >/dev/null
+
+APP_NAME="Gradle"
+APP_BASE_NAME=\`basename "$0"\`
+DEFAULT_JVM_OPTS='"-Xmx64m" "-Xms64m"'
+
+CLASSPATH=$APP_HOME/gradle/wrapper/gradle-wrapper.jar
+
+if [ ! -r "$CLASSPATH" ]; then
+    if command -v gradle >/dev/null 2>&1; then
+        exec gradle "$@"
+    else
+        mkdir -p "$APP_HOME/gradle/wrapper"
+        curl -sSL "https://raw.githubusercontent.com/gradle/gradle/v8.7.0/gradle/wrapper/gradle-wrapper.jar" -o "$CLASSPATH" 2>/dev/null || true
+    fi
+fi
+
+exec java $DEFAULT_JVM_OPTS -classpath "$CLASSPATH" org.gradle.wrapper.GradleWrapperMain "$@"`
+  },
+  {
+    path: 'gradle/wrapper/gradle-wrapper.properties',
+    category: 'config',
+    name: 'gradle-wrapper.properties',
+    description: 'Gradle wrapper version and distribution URL configuration',
+    language: 'properties',
+    content: `distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+distributionUrl=https\\://services.gradle.org/distributions/gradle-8.7-bin.zip
+networkTimeout=10000
+validateDistributionUrl=true
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists`
   },
   {
     path: 'build.gradle.kts',
