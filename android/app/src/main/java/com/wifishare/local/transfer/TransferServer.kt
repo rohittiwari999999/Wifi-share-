@@ -18,6 +18,7 @@ import io.ktor.server.plugins.cors.routing.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
+import io.ktor.utils.io.*
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -161,46 +162,50 @@ class TransferServer(
                     var bytesSinceLastUpdate = 0L
 
                     try {
-                        val channel = call.receiveChannel()
-                        val buffer = ByteArray(64 * 1024) // 64 KB buffer for streaming
+                        withContext(Dispatchers.IO) {
+                            val inputStream = call.receive<InputStream>()
+                            val buffer = ByteArray(64 * 1024) // 64 KB buffer for streaming
 
-                        while (!channel.isClosedForRead) {
-                            val read = channel.readAvailable(buffer, 0, buffer.size)
-                            if (read <= 0) break
+                            inputStream.use { input ->
+                                outputStream.use { out ->
+                                    var read: Int
+                                    while (input.read(buffer).also { read = it } != -1) {
+                                        if (read <= 0) continue
 
-                            outputStream.write(buffer, 0, read)
-                            digest.update(buffer, 0, read)
+                                        out.write(buffer, 0, read)
+                                        digest.update(buffer, 0, read)
 
-                            totalBytesReceived += read
-                            bytesSinceLastUpdate += read
+                                        totalBytesReceived += read
+                                        bytesSinceLastUpdate += read
 
-                            val now = System.currentTimeMillis()
-                            val elapsed = now - lastUpdateTime
-                            if (elapsed >= 300) { // Update progress UI every 300ms
-                                val speed = if (elapsed > 0) (bytesSinceLastUpdate * 1000) / elapsed else 0L
-                                val remainingBytes = fileSize - totalBytesReceived
-                                val eta = if (speed > 0) remainingBytes / speed else 0L
+                                        val now = System.currentTimeMillis()
+                                        val elapsed = now - lastUpdateTime
+                                        if (elapsed >= 300) { // Update progress UI every 300ms
+                                            val speed = if (elapsed > 0) (bytesSinceLastUpdate * 1000) / elapsed else 0L
+                                            val remainingBytes = (fileSize - totalBytesReceived).coerceAtLeast(0L)
+                                            val eta = if (speed > 0) remainingBytes / speed else 0L
 
-                                _serverProgress.value = TransferProgress(
-                                    sessionId = sessionId ?: "",
-                                    fileId = fileId ?: "",
-                                    fileName = fileName,
-                                    bytesTransferred = totalBytesReceived,
-                                    totalBytes = fileSize,
-                                    bytesPerSecond = speed,
-                                    estimatedRemainingSeconds = eta,
-                                    currentFileIndex = 1,
-                                    totalFiles = 1,
-                                    state = TransferState.IN_PROGRESS
-                                )
+                                            _serverProgress.value = TransferProgress(
+                                                sessionId = sessionId ?: "",
+                                                fileId = fileId ?: "",
+                                                fileName = fileName,
+                                                bytesTransferred = totalBytesReceived,
+                                                totalBytes = fileSize,
+                                                bytesPerSecond = speed,
+                                                estimatedRemainingSeconds = eta,
+                                                currentFileIndex = 1,
+                                                totalFiles = 1,
+                                                state = TransferState.IN_PROGRESS
+                                            )
 
-                                lastUpdateTime = now
-                                bytesSinceLastUpdate = 0L
+                                            lastUpdateTime = now
+                                            bytesSinceLastUpdate = 0L
+                                        }
+                                    }
+                                    out.flush()
+                                }
                             }
                         }
-
-                        outputStream.flush()
-                        outputStream.close()
 
                         // Verify SHA-256
                         val calculatedHash = digest.digest().joinToString("") { "%02x".format(it) }
@@ -242,7 +247,7 @@ class TransferServer(
 
                         call.respond(HttpStatusCode.OK, "Upload complete and verified.")
                     } catch (e: Exception) {
-                        outputStream.close()
+                        try { outputStream.close() } catch (_: Exception) {}
                         destFile.delete()
                         Log.e(tag, "Upload error", e)
                         call.respond(HttpStatusCode.InternalServerError, "Streaming error: ${e.message}")
