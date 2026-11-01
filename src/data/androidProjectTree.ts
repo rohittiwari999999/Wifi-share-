@@ -328,7 +328,30 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-}`
+}
+`
+  },
+  {
+    path: 'app/proguard-rules.pro',
+    category: 'config',
+    name: 'proguard-rules.pro',
+    description: 'ProGuard/R8 rules for Netty, Ktor, and Kotlinx Serialization',
+    language: 'properties',
+    content: `# Proguard rules for WiFiShare Android Application
+-dontwarn io.netty.**
+-keep class io.netty.** { *; }
+
+-dontwarn io.ktor.**
+-keep class io.ktor.** { *; }
+
+-keepattributes *Annotation*,InnerClasses
+-dontnote kotlinx.serialization.SerializationKt
+
+-dontwarn kotlinx.coroutines.**
+-keep class kotlinx.coroutines.** { *; }
+
+-dontwarn androidx.room.**
+-keep class * extends androidx.room.RoomDatabase`
   },
   {
     path: 'app/src/main/AndroidManifest.xml',
