@@ -68,7 +68,7 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.7'
+          gradle-version: '8.10.2'
 
       # Auto-detect whether Android project is in root or in android/ subdirectory
       - name: Detect Android Project Directory
@@ -85,16 +85,21 @@ jobs:
             echo "Falling back to Root (.)"
           fi
 
-      # Ensure gradlew exists and is executable
-      - name: Ensure Gradle Wrapper Executable
+      # Ensure gradlew exists, is executable, and upgraded to Gradle 8.10.2 (AGP 8.8.0 requirement)
+      - name: Setup & Upgrade Gradle Wrapper to 8.10.2
         run: |
           cd $PROJECT_DIR
-          if [ ! -f "gradlew" ]; then
-            echo "gradlew not found in $PROJECT_DIR; generating Gradle wrapper..."
-            gradle wrapper --gradle-version 8.7
+          # Auto-upgrade gradle-wrapper.properties to 8.10.2 in case repo had an older version
+          if [ -f "gradle/wrapper/gradle-wrapper.properties" ]; then
+            echo "Upgrading existing gradle-wrapper.properties to 8.10.2..."
+            sed -i 's/gradle-[0-9.]\+-\(bin\|all\)\.zip/gradle-8.10.2-bin.zip/g' gradle/wrapper/gradle-wrapper.properties
+            cat gradle/wrapper/gradle-wrapper.properties
           fi
+          # Ensure gradlew is generated with 8.10.2
+          gradle wrapper --gradle-version 8.10.2 --distribution-type bin
           chmod +x gradlew
-          ls -la gradlew
+          echo "Verified Gradle wrapper version:"
+          ./gradlew --version
 
       # 1. Decode Release Keystore from GitHub Secrets if available
       - name: Decode Release Keystore
@@ -235,6 +240,25 @@ jobs:
         >
           {copiedKey === 'all_yaml' ? <Check className="w-4 h-4 text-emerald-300" /> : <Copy className="w-4 h-4" />}
           <span>{copiedKey === 'all_yaml' ? 'Copied Workflow!' : 'Copy Workflow YAML'}</span>
+        </button>
+      </div>
+
+      {/* Gradle 8.10.2 / AGP 8.8.0 Fix Notice */}
+      <div className="p-4 rounded-xl bg-amber-950/40 border border-amber-600/50 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2 text-amber-300 font-bold">
+            <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+            <span>Fix Applied: Gradle 8.10.2 Update (AGP 8.8.0 Requirement)</span>
+          </div>
+          <p className="text-amber-200/90 leading-relaxed">
+            Agar aapko <code className="bg-amber-900/60 px-1 py-0.5 rounded text-amber-200 font-mono">"Minimum supported Gradle version is 8.10.2. Current version is 8.7"</code> error mila tha, toh niche diya gaya workflow YAML automatically Gradle 8.10.2 setup karta hai aur wrapper properties ko upgrade kar deta hai. Naya YAML copy karke GitHub par replace karein!
+          </p>
+        </div>
+        <button
+          onClick={() => copyToClipboard(workflowYaml, 'quick_copy_fix')}
+          className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-lg font-medium shrink-0 transition-colors"
+        >
+          {copiedKey === 'quick_copy_fix' ? 'Copied!' : 'Copy Fixed YAML'}
         </button>
       </div>
 

@@ -52,7 +52,7 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.7'
+          gradle-version: '8.10.2'
 
       # Auto-detect whether Android project is in root or in android/ subdirectory
       - name: Detect Android Project Directory
@@ -69,16 +69,21 @@ jobs:
             echo "Falling back to Root (.)"
           fi
 
-      # Ensure gradlew exists and is executable
-      - name: Ensure Gradle Wrapper Executable
+      # Ensure gradlew exists, is executable, and upgraded to Gradle 8.10.2 (AGP 8.8.0 requirement)
+      - name: Setup & Upgrade Gradle Wrapper to 8.10.2
         run: |
           cd $PROJECT_DIR
-          if [ ! -f "gradlew" ]; then
-            echo "gradlew not found in $PROJECT_DIR; generating Gradle wrapper..."
-            gradle wrapper --gradle-version 8.7
+          # Auto-upgrade gradle-wrapper.properties to 8.10.2 in case repo had an older version
+          if [ -f "gradle/wrapper/gradle-wrapper.properties" ]; then
+            echo "Upgrading existing gradle-wrapper.properties to 8.10.2..."
+            sed -i 's/gradle-[0-9.]\+-\(bin\|all\)\.zip/gradle-8.10.2-bin.zip/g' gradle/wrapper/gradle-wrapper.properties
+            cat gradle/wrapper/gradle-wrapper.properties
           fi
+          # Ensure gradlew is generated with 8.10.2
+          gradle wrapper --gradle-version 8.10.2 --distribution-type bin
           chmod +x gradlew
-          ls -la gradlew
+          echo "Verified Gradle wrapper version:"
+          ./gradlew --version
 
       # 1. Decode Release Keystore from GitHub Secrets if available
       - name: Decode Release Keystore
@@ -203,11 +208,11 @@ exec java $DEFAULT_JVM_OPTS -classpath "$CLASSPATH" org.gradle.wrapper.GradleWra
     path: 'gradle/wrapper/gradle-wrapper.properties',
     category: 'config',
     name: 'gradle-wrapper.properties',
-    description: 'Gradle wrapper version and distribution URL configuration',
+    description: 'Gradle wrapper version and distribution URL configuration (Gradle 8.10.2 required by AGP 8.8.0)',
     language: 'properties',
     content: `distributionBase=GRADLE_USER_HOME
 distributionPath=wrapper/dists
-distributionUrl=https\\://services.gradle.org/distributions/gradle-8.7-bin.zip
+distributionUrl=https\\://services.gradle.org/distributions/gradle-8.10.2-bin.zip
 networkTimeout=10000
 validateDistributionUrl=true
 zipStoreBase=GRADLE_USER_HOME
