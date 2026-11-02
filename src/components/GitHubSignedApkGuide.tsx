@@ -109,7 +109,8 @@ jobs:
           android.nonTransitiveRClass=true
           android.lint.checkReleaseBuilds=false
           android.lint.abortOnError=false
-          kotlin.daemon.jvmargs=-Xmx2048m"
+          kotlin.daemon.jvmargs=-Xmx2048m
+          ksp.useKSP2=false"
 
           echo "$PROPS" > gradle.properties
           mkdir -p android

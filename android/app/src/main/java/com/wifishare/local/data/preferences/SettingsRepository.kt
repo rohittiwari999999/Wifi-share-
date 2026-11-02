@@ -27,7 +27,7 @@ class SettingsRepository(private val context: Context) {
     }
 
     private val defaultDeviceName: String
-        get() = "${Build.MANUFACTURER.capitalize()} ${Build.MODEL}"
+        get() = "${Build.MANUFACTURER.replaceFirstChar { it.uppercase() }} ${Build.MODEL}"
 
     val settingsFlow: Flow<AppSettings> = context.dataStore.data.map { preferences ->
         AppSettings(
