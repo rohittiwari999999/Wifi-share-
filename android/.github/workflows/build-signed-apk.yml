@@ -270,11 +270,13 @@ jobs:
         id: build_release
         run: |
           cd $PROJECT_DIR
-          echo "Building Release APK..."
+          echo "Building Release APK with Gradle..."
           if ! ./gradlew assembleRelease --no-daemon --stacktrace -x test; then
-            echo "assembleRelease failed or had issues, attempting fallback assemble..."
-            ./gradlew assemble --no-daemon --stacktrace -x test || ./gradlew assembleDebug --no-daemon --stacktrace -x test || true
+            echo "assembleRelease failed or had issues, attempting assembleDebug fallback..."
+            ./gradlew assembleDebug --no-daemon --stacktrace -x test
           fi
+          echo "Gradle APK build step finished. Checking APK output:"
+          find . -name "*.apk" -ls || true
 
       # Step 2: Build App Bundle (AAB for Google Play Store)
       - name: Build App Bundle (AAB)

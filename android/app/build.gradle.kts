@@ -48,6 +48,8 @@ android {
                     storePassword = "android"
                     keyAlias = "androiddebugkey"
                     keyPassword = "android"
+                } else {
+                    initWith(signingConfigs.getByName("debug"))
                 }
             }
         }

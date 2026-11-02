@@ -296,20 +296,23 @@ jobs:
       # Step 1: Build Release APK via Gradle
       - name: Build Release APK
         id: build_release
-        continue-on-error: true
         run: |
           cd $PROJECT_DIR
-          echo "Building Release APK..."
-          ./gradlew assembleRelease --no-daemon -x test || ./gradlew assemble --no-daemon -x test || true
+          echo "Building Release APK with Gradle..."
+          if ! ./gradlew assembleRelease --no-daemon --stacktrace -x test; then
+            echo "assembleRelease failed or had issues, attempting assembleDebug fallback..."
+            ./gradlew assembleDebug --no-daemon --stacktrace -x test
+          fi
+          echo "Gradle APK build step finished. Checking APK output:"
+          find . -name "*.apk" -ls || true
 
       # Step 2: Build App Bundle (AAB for Google Play Store)
       - name: Build App Bundle (AAB)
         id: build_bundle
-        continue-on-error: true
         run: |
           cd $PROJECT_DIR
           echo "Building Release App Bundle (AAB)..."
-          ./gradlew bundleRelease --no-daemon -x test || ./gradlew bundle --no-daemon -x test || true
+          ./gradlew bundleRelease --no-daemon --stacktrace -x test || ./gradlew bundle --no-daemon --stacktrace -x test || true
 
       # Step 3: Build Universal APK from App Bundle (Guaranteed APK generation fallback)
       - name: Generate Universal APK from App Bundle
