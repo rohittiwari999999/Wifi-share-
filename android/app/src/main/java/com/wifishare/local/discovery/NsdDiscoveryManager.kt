@@ -328,8 +328,8 @@ class NsdDiscoveryManager(private val context: Context) {
                             Log.d(tag, "Subnet probe found peer: ${peer.name} at ${peer.ipAddress}")
                         }
                         conn.disconnect()
-                    } catch (_: Exception) {
-                        try { socket?.close() } catch (_: Exception) {}
+                    } catch (e: Exception) {
+                        try { socket?.close() } catch (ignored: Exception) {}
                     }
                 }
             }.awaitAll()
@@ -350,7 +350,7 @@ class NsdDiscoveryManager(private val context: Context) {
                     }
                 }
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {}
         return null
     }
 

@@ -268,7 +268,7 @@ class TransferServer(
 
                         call.respond(HttpStatusCode.OK, "Upload complete and verified.")
                     } catch (e: Exception) {
-                        try { outputStream.close() } catch (_: Exception) {}
+                        try { outputStream.close() } catch (ignored: Exception) {}
                         destFile.delete()
                         Log.e(tag, "Upload error", e)
                         call.respond(HttpStatusCode.InternalServerError, "Streaming error: ${e.message}")

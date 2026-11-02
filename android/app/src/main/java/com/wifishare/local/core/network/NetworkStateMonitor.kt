@@ -57,7 +57,7 @@ class NetworkStateMonitor(private val context: Context) {
     fun stopMonitoring() {
         try {
             connectivityManager.unregisterNetworkCallback(networkCallback)
-        } catch (_: Exception) {
+        } catch (ignored: Exception) {
             // Already unregistered
         }
         releaseMulticastLock()
@@ -71,7 +71,7 @@ class NetworkStateMonitor(private val context: Context) {
                 }
             }
             multicastLock?.acquire()
-        } catch (_: Exception) {
+        } catch (ignored: Exception) {
             // Permission or hardware restriction
         }
     }
@@ -81,7 +81,7 @@ class NetworkStateMonitor(private val context: Context) {
             if (multicastLock?.isHeld == true) {
                 multicastLock?.release()
             }
-        } catch (_: Exception) {
+        } catch (ignored: Exception) {
             // Ignore
         }
     }

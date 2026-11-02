@@ -113,7 +113,7 @@ class TransferForegroundService : Service() {
             ).apply {
                 acquire(60 * 60 * 1000L) // Max 1 hour
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
         }
     }
 

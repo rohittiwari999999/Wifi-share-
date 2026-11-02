@@ -268,20 +268,21 @@ jobs:
       # Step 1: Build Release APK via Gradle
       - name: Build Release APK
         id: build_release
-        continue-on-error: true
         run: |
           cd $PROJECT_DIR
           echo "Building Release APK..."
-          ./gradlew assembleRelease --no-daemon -x test || ./gradlew assemble --no-daemon -x test || true
+          if ! ./gradlew assembleRelease --no-daemon --stacktrace -x test; then
+            echo "assembleRelease failed or had issues, attempting fallback assemble..."
+            ./gradlew assemble --no-daemon --stacktrace -x test || ./gradlew assembleDebug --no-daemon --stacktrace -x test || true
+          fi
 
       # Step 2: Build App Bundle (AAB for Google Play Store)
       - name: Build App Bundle (AAB)
         id: build_bundle
-        continue-on-error: true
         run: |
           cd $PROJECT_DIR
           echo "Building Release App Bundle (AAB)..."
-          ./gradlew bundleRelease --no-daemon -x test || ./gradlew bundle --no-daemon -x test || true
+          ./gradlew bundleRelease --no-daemon --stacktrace -x test || ./gradlew bundle --no-daemon --stacktrace -x test || true
 
       # Step 3: Build Universal APK from App Bundle (Guaranteed APK generation fallback)
       - name: Generate Universal APK from App Bundle
@@ -333,16 +334,16 @@ jobs:
       - name: Collect Build Artifacts
         run: |
           mkdir -p release-output
-          # Copy any Gradle generated APKs
+          echo "Searching for all generated APKs..."
           find . -type f -name "*.apk" ! -path "./release-output/*" -exec cp -v {} release-output/ \; 2>/dev/null || true
-          # Copy any Gradle generated AABs
+          echo "Searching for all generated AABs..."
           find . -type f -name "*.aab" ! -path "./release-output/*" -exec cp -v {} release-output/ \; 2>/dev/null || true
 
           # If WiFiShare-Release.apk does not exist yet, find any other APK and copy it
           if [ ! -f release-output/WiFiShare-Release.apk ]; then
             ANY_APK=$(find release-output -type f -name "*.apk" | head -n 1)
             if [ -n "$ANY_APK" ]; then
-              cp "$ANY_APK" release-output/WiFiShare-Release.apk
+              cp -v "$ANY_APK" release-output/WiFiShare-Release.apk
             fi
           fi
 
@@ -356,6 +357,8 @@ jobs:
           ARTIFACT_COUNT=$(find release-output -type f \( -name "*.apk" -o -name "*.aab" \) | wc -l)
           if [ "$ARTIFACT_COUNT" -eq 0 ]; then
             echo "::error::No APK or AAB files were generated! Please check the logs above."
+            echo "Workspace tree:"
+            find . -maxdepth 4 -not -path '*/.*'
             exit 1
           fi
           echo "Verification SUCCESS! Found $ARTIFACT_COUNT artifact(s):"
