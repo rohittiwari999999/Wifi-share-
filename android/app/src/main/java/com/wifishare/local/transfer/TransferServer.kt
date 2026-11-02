@@ -49,7 +49,15 @@ class TransferServer(
 
     // Current transfer progress for UI
     private val _serverProgress = MutableStateFlow<TransferProgress?>(null)
-    val serverProgress: StateFlow<TransferProgress?> = _serverProgress.asStateFlow()
+    // Current device name returned in handshakes and ping responses
+    @Volatile
+    var currentDeviceName: String = "WiFiShare Peer"
+
+    fun updateDeviceName(name: String) {
+        if (name.isNotBlank()) {
+            currentDeviceName = name
+        }
+    }
 
     fun startServer(port: Int = DEFAULT_SERVER_PORT) {
         if (server != null) return
@@ -69,6 +77,19 @@ class TransferServer(
             }
 
             routing {
+                // Ping endpoint for fast subnet peer discovery and AP isolation fallback
+                get("/api/v1/ping") {
+                    call.respond(
+                        HttpStatusCode.OK,
+                        SessionHandshakeResponse(
+                            sessionId = "ping",
+                            receiverName = currentDeviceName,
+                            accepted = true,
+                            message = "pong"
+                        )
+                    )
+                }
+
                 // Handshake endpoint
                 post("/api/v1/session") {
                     val req = call.receive<SessionHandshakeRequest>()
@@ -77,7 +98,7 @@ class TransferServer(
                         HttpStatusCode.OK,
                         SessionHandshakeResponse(
                             sessionId = sessionId,
-                            receiverName = "WiFiShare Receiver",
+                            receiverName = currentDeviceName,
                             accepted = true,
                             message = "Handshake successful"
                         )

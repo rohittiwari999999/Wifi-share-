@@ -88,6 +88,19 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                // Automatically ensure local transfer server and discovery are active
+                LaunchedEffect(appSettings.deviceName) {
+                    app.transferManager.ensureServerRunning(appSettings.deviceName)
+                }
+
+                // When user navigates to DEVICES screen, auto-start discovery and advertising
+                LaunchedEffect(currentScreen) {
+                    if (currentScreen == Screen.DEVICES) {
+                        app.transferManager.ensureServerRunning(appSettings.deviceName)
+                        app.nsdManager.startDiscovery()
+                    }
+                }
+
                 Scaffold(
                     bottomBar = {
                         NavigationBar {
@@ -124,6 +137,7 @@ class MainActivity : ComponentActivity() {
                             Screen.DEVICES -> DevicesScreen(
                                 devices = discoveredDevices,
                                 isScanning = isScanning,
+                                localIpAddress = networkStatus.localIpAddress,
                                 onStartScan = { app.nsdManager.startDiscovery() },
                                 onStopScan = { app.nsdManager.stopDiscovery() },
                                 onSelectDevice = { device ->

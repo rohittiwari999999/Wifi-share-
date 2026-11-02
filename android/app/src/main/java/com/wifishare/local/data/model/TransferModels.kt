@@ -7,7 +7,7 @@ import kotlinx.serialization.Serializable
  */
 const val PROTOCOL_VERSION = "1.0.0"
 const val DEFAULT_SERVER_PORT = 8945
-const val NSD_SERVICE_TYPE = "_wifishare._tcp."
+const val NSD_SERVICE_TYPE = "_wifishare._tcp"
 
 @Serializable
 enum class DeviceType {

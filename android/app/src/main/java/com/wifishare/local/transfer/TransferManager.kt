@@ -33,10 +33,14 @@ class TransferManager(
     private val _isReceiveModeActive = MutableStateFlow(false)
     val isReceiveModeActive: StateFlow<Boolean> = _isReceiveModeActive.asStateFlow()
 
-    fun enableReceiveMode(deviceName: String, port: Int = DEFAULT_SERVER_PORT) {
-        if (_isReceiveModeActive.value) return
+    fun ensureServerRunning(deviceName: String, port: Int = DEFAULT_SERVER_PORT) {
+        server.updateDeviceName(deviceName)
         server.startServer(port)
         nsdManager.startAdvertising(deviceName, port)
+    }
+
+    fun enableReceiveMode(deviceName: String, port: Int = DEFAULT_SERVER_PORT) {
+        ensureServerRunning(deviceName, port)
         _isReceiveModeActive.value = true
     }
 
