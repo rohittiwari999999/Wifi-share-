@@ -49,6 +49,7 @@ class TransferServer(
 
     // Current transfer progress for UI
     private val _serverProgress = MutableStateFlow<TransferProgress?>(null)
+    val serverProgress: StateFlow<TransferProgress?> = _serverProgress.asStateFlow()
     // Current device name returned in handshakes and ping responses
     @Volatile
     var currentDeviceName: String = "WiFiShare Peer"
