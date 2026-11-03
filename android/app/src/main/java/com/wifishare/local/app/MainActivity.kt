@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -20,6 +21,7 @@ import com.wifishare.local.core.permissions.PermissionManager
 import com.wifishare.local.data.model.DeviceInfo
 import com.wifishare.local.data.model.FileTransferItem
 import com.wifishare.local.data.preferences.AppSettings
+import com.wifishare.local.ui.browser.BrowserShareModal
 import com.wifishare.local.ui.devices.DevicesScreen
 import com.wifishare.local.ui.history.HistoryScreen
 import com.wifishare.local.ui.home.HomeScreen
@@ -80,6 +82,23 @@ class MainActivity : ComponentActivity() {
                 var selectedTargetDevice by remember { mutableStateOf<DeviceInfo?>(null) }
                 var selectedFiles by remember { mutableStateOf<List<FileTransferItem>>(emptyList()) }
 
+                val activeBrowserSession by app.transferManager.browserServer.currentSession.collectAsState()
+                val browserProgress by app.transferManager.browserServer.transferProgress.collectAsState()
+                var showBrowserModal by remember { mutableStateOf(false) }
+
+                val browserFilePicker = rememberLauncherForActivityResult(
+                    contract = ActivityResultContracts.OpenMultipleDocuments()
+                ) { uris ->
+                    if (uris.isNotEmpty()) {
+                        val items = uris.mapNotNull { app.storageManager.queryFileMetadata(it) }
+                        if (items.isNotEmpty()) {
+                            selectedFiles = items
+                            app.transferManager.startBrowserSession(appSettings.deviceName, items)
+                            showBrowserModal = true
+                        }
+                    }
+                }
+
                 // Auto-switch to transfer screen when active transfer starts
                 val activeProgress = clientProgress ?: serverProgress
                 LaunchedEffect(activeProgress) {
@@ -128,8 +147,7 @@ class MainActivity : ComponentActivity() {
                                 onNavigateToSend = { currentScreen = Screen.SEND },
                                 onNavigateToReceive = { currentScreen = Screen.RECEIVE },
                                 onNavigateToBrowserShare = {
-                                    // Start browser session flow
-                                    currentScreen = Screen.SEND
+                                    browserFilePicker.launch(arrayOf("*/*"))
                                 },
                                 onNavigateToDevices = { currentScreen = Screen.DEVICES }
                             )
@@ -161,6 +179,12 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onClearFiles = { selectedFiles = emptyList() },
                                 onSelectTargetDevice = { currentScreen = Screen.DEVICES },
+                                onShareToBrowser = {
+                                    if (selectedFiles.isNotEmpty()) {
+                                        app.transferManager.startBrowserSession(appSettings.deviceName, selectedFiles)
+                                        showBrowserModal = true
+                                    }
+                                },
                                 onStartTransfer = {
                                     val target = selectedTargetDevice
                                     if (target != null && selectedFiles.isNotEmpty()) {
@@ -222,6 +246,18 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                     }
+                }
+
+                if (showBrowserModal && activeBrowserSession != null) {
+                    BrowserShareModal(
+                        session = activeBrowserSession!!,
+                        progress = browserProgress,
+                        availableIps = networkStatus.availableIps,
+                        onDismiss = {
+                            app.transferManager.stopBrowserSession()
+                            showBrowserModal = false
+                        }
+                    )
                 }
             }
         }

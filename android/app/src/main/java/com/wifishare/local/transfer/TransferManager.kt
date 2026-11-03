@@ -14,7 +14,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
 
 class TransferManager(
     private val context: Context,
@@ -26,7 +25,7 @@ class TransferManager(
 ) {
     val server = TransferServer(context, storageManager, database)
     val client = TransferClient(context, storageManager, database)
-    val browserServer = BrowserReceiverServer(context, storageManager)
+    val browserServer = BrowserReceiverServer(context, storageManager, database)
 
     private val scope = CoroutineScope(Dispatchers.Main)
 
@@ -57,18 +56,23 @@ class TransferManager(
     fun startBrowserSession(
         senderName: String,
         files: List<FileTransferItem>,
-        port: Int = DEFAULT_SERVER_PORT
+        port: Int = BROWSER_SERVER_PORT
     ): BrowserSession {
         val token = TokenGenerator.generateSessionToken(16)
         val totalBytes = files.sumOf { it.size }
-        val session = BrowserSession(
+        val localIp = networkMonitor.getLocalIpv4Address() ?: "127.0.0.1"
+
+        val initialSession = BrowserSession(
             token = token,
             senderName = senderName,
             files = files,
-            totalBytes = totalBytes
+            totalBytes = totalBytes,
+            localIp = localIp,
+            serverPort = port
         )
-        browserServer.startSession(session, port)
-        return session
+
+        val actualPort = browserServer.startSession(initialSession, port)
+        return initialSession.copy(serverPort = actualPort)
     }
 
     fun stopBrowserSession() {

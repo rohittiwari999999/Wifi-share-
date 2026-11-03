@@ -100,14 +100,39 @@ data class TransferProgress(
 /**
  * Browser transfer session data.
  */
+const val BROWSER_SERVER_PORT = 8946
+
 @Serializable
 data class BrowserSession(
     val token: String,
     val senderName: String,
     val files: List<FileTransferItem>,
     val totalBytes: Long,
+    val serverPort: Int = BROWSER_SERVER_PORT,
+    val localIp: String = "",
     val createdAt: Long = System.currentTimeMillis(),
-    val expiresAt: Long = System.currentTimeMillis() + (15 * 60 * 1000), // 15 min expiry
+    val expiresAt: Long = System.currentTimeMillis() + (30 * 60 * 1000), // 30 min expiry
     val isApproved: Boolean = false,
-    val isRejected: Boolean = false
+    val isRejected: Boolean = false,
+    val isCancelled: Boolean = false
+)
+
+@Serializable
+data class BrowserTransferProgress(
+    val sessionId: String = "",
+    val currentFileId: String = "",
+    val currentFileName: String = "",
+    val fileIndex: Int = 0,
+    val totalFiles: Int = 0,
+    val bytesTransferred: Long = 0L,
+    val totalFileBytes: Long = 0L,
+    val sessionTotalBytes: Long = 0L,
+    val sessionBytesTransferred: Long = 0L,
+    val speedBytesPerSec: Long = 0L,
+    val isApproved: Boolean = false,
+    val isRejected: Boolean = false,
+    val isCompleted: Boolean = false,
+    val isCancelled: Boolean = false,
+    val activeDownloadsCount: Int = 0,
+    val errorMessage: String? = null
 )

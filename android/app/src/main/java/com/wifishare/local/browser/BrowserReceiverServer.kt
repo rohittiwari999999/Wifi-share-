@@ -3,149 +3,351 @@ package com.wifishare.local.browser
 import android.content.Context
 import android.net.Uri
 import android.util.Log
+import com.wifishare.local.core.security.HashUtils
 import com.wifishare.local.core.storage.StorageManager
+import com.wifishare.local.data.database.AppDatabase
+import com.wifishare.local.data.database.TransferEntity
+import com.wifishare.local.data.model.BROWSER_SERVER_PORT
 import com.wifishare.local.data.model.BrowserSession
-import com.wifishare.local.data.model.DEFAULT_SERVER_PORT
+import com.wifishare.local.data.model.BrowserTransferProgress
 import io.ktor.http.*
+import io.ktor.serialization.kotlinx.json.*
 import io.ktor.server.application.*
 import io.ktor.server.engine.*
 import io.ktor.server.netty.*
+import io.ktor.server.plugins.contentnegotiation.*
 import io.ktor.server.plugins.cors.routing.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
 import java.io.InputStream
+import java.net.ServerSocket
+import java.net.URLEncoder
 
 class BrowserReceiverServer(
     private val context: Context,
-    private val storageManager: StorageManager
+    private val storageManager: StorageManager,
+    private val database: AppDatabase
 ) {
     private val tag = "BrowserReceiverServer"
     private var server: EmbeddedServer<*, *>? = null
+    private val scope = CoroutineScope(Dispatchers.IO)
 
     private val _currentSession = MutableStateFlow<BrowserSession?>(null)
     val currentSession: StateFlow<BrowserSession?> = _currentSession.asStateFlow()
 
-    fun startSession(session: BrowserSession, port: Int = DEFAULT_SERVER_PORT) {
-        stopSession()
-        _currentSession.value = session
+    private val _transferProgress = MutableStateFlow(BrowserTransferProgress())
+    val transferProgress: StateFlow<BrowserTransferProgress> = _transferProgress.asStateFlow()
 
-        server = embeddedServer(Netty, port = port) {
-            install(CORS) {
-                anyHost()
+    var boundPort: Int = BROWSER_SERVER_PORT
+        private set
+
+    /**
+     * Finds an available port starting from the desired port.
+     */
+    private fun findAvailablePort(startPort: Int): Int {
+        for (candidate in startPort..(startPort + 10)) {
+            try {
+                ServerSocket(candidate).use { socket ->
+                    socket.reuseAddress = true
+                    return candidate
+                }
+            } catch (ignored: Exception) {
+                // Port occupied, try next
             }
+        }
+        return startPort
+    }
 
-            routing {
-                // Serves responsive HTML portal
-                get("/receive/{token}") {
-                    val token = call.parameters["token"]
-                    val active = _currentSession.value
+    fun startSession(session: BrowserSession, requestedPort: Int = BROWSER_SERVER_PORT): Int {
+        stopSession()
 
-                    if (active == null || active.token != token) {
-                        call.respondText(
-                            "<h3>Session expired or invalid.</h3>",
-                            ContentType.Text.Html,
-                            HttpStatusCode.NotFound
+        val actualPort = findAvailablePort(requestedPort)
+        boundPort = actualPort
+
+        val configuredSession = session.copy(serverPort = actualPort)
+        _currentSession.value = configuredSession
+        _transferProgress.value = BrowserTransferProgress(
+            sessionId = configuredSession.token,
+            totalFiles = configuredSession.files.size,
+            sessionTotalBytes = configuredSession.totalBytes
+        )
+
+        try {
+            server = embeddedServer(Netty, port = actualPort, host = "0.0.0.0") {
+                install(ContentNegotiation) {
+                    json(Json {
+                        ignoreUnknownKeys = true
+                        encodeDefaults = true
+                    })
+                }
+                install(CORS) {
+                    anyHost()
+                    allowHeader(HttpHeaders.ContentType)
+                    allowHeader(HttpHeaders.Range)
+                    allowHeader(HttpHeaders.AcceptRanges)
+                }
+
+                routing {
+                    // Friendly landing or instructions
+                    get("/") {
+                        val active = _currentSession.value
+                        if (active != null) {
+                            call.respondRedirect("/receive/${active.token}")
+                        } else {
+                            call.respondText(
+                                "<h3>WiFi Share Browser Server is Active. Please scan the QR code generated by the sender.</h3>",
+                                ContentType.Text.Html
+                            )
+                        }
+                    }
+
+                    // Serves mobile-responsive receiver portal
+                    get("/receive/{token}") {
+                        val token = call.parameters["token"]
+                        val active = _currentSession.value
+
+                        if (active == null || active.token != token) {
+                            call.respondText(
+                                """
+                                <!DOCTYPE html><html><body style="background:#090d16;color:#f8fafc;font-family:sans-serif;padding:30px;text-align:center;">
+                                    <h2>Session Not Found or Expired</h2>
+                                    <p style="color:#94a3b8;margin-top:12px;">Please request a new QR code from the sender phone.</p>
+                                </body></html>
+                                """.trimIndent(),
+                                ContentType.Text.Html,
+                                HttpStatusCode.NotFound
+                            )
+                            return@get
+                        }
+
+                        if (System.currentTimeMillis() > active.expiresAt) {
+                            call.respondText(
+                                """
+                                <!DOCTYPE html><html><body style="background:#090d16;color:#f8fafc;font-family:sans-serif;padding:30px;text-align:center;">
+                                    <h2>Transfer Session Expired</h2>
+                                    <p style="color:#94a3b8;margin-top:12px;">The 30-minute transfer window has expired. Generate a new QR code on the sender phone.</p>
+                                </body></html>
+                                """.trimIndent(),
+                                ContentType.Text.Html,
+                                HttpStatusCode.Gone
+                            )
+                            return@get
+                        }
+
+                        val html = BrowserPortal.buildPortalHtml(active)
+                        call.respondText(html, ContentType.Text.Html)
+                    }
+
+                    // API: Accept transfer (explicit receiver approval)
+                    post("/api/v1/browser/accept/{token}") {
+                        val token = call.parameters["token"]
+                        val active = _currentSession.value
+                        if (active != null && active.token == token) {
+                            _currentSession.value = active.copy(isApproved = true)
+                            _transferProgress.value = _transferProgress.value.copy(
+                                isApproved = true,
+                                isRejected = false
+                            )
+                            call.respond(HttpStatusCode.OK, mapOf("status" to "approved"))
+                        } else {
+                            call.respond(HttpStatusCode.NotFound, "Invalid session token")
+                        }
+                    }
+
+                    // API: Reject transfer
+                    post("/api/v1/browser/reject/{token}") {
+                        val token = call.parameters["token"]
+                        val active = _currentSession.value
+                        if (active != null && active.token == token) {
+                            _currentSession.value = active.copy(isRejected = true)
+                            _transferProgress.value = _transferProgress.value.copy(
+                                isRejected = true,
+                                isApproved = false
+                            )
+                            call.respond(HttpStatusCode.OK, mapOf("status" to "rejected"))
+                        } else {
+                            call.respond(HttpStatusCode.NotFound, "Invalid session token")
+                        }
+                    }
+
+                    // API: Cancel session from sender or receiver
+                    post("/api/v1/browser/cancel/{token}") {
+                        val token = call.parameters["token"]
+                        val active = _currentSession.value
+                        if (active != null && active.token == token) {
+                            _currentSession.value = active.copy(isCancelled = true)
+                            _transferProgress.value = _transferProgress.value.copy(isCancelled = true)
+                            call.respond(HttpStatusCode.OK, mapOf("status" to "cancelled"))
+                        } else {
+                            call.respond(HttpStatusCode.NotFound, "Invalid session token")
+                        }
+                    }
+
+                    // API: Live Progress endpoint for browser polling
+                    get("/api/v1/browser/progress/{token}") {
+                        val token = call.parameters["token"]
+                        val active = _currentSession.value
+                        if (active != null && active.token == token) {
+                            call.respond(_transferProgress.value)
+                        } else {
+                            call.respond(HttpStatusCode.NotFound, "Invalid session token")
+                        }
+                    }
+
+                    // API: Download file (Requires explicit receiver approval!)
+                    get("/api/v1/browser/download/{token}/{fileId}") {
+                        val token = call.parameters["token"]
+                        val fileId = call.parameters["fileId"]
+                        val active = _currentSession.value
+
+                        if (active == null || active.token != token) {
+                            call.respond(HttpStatusCode.Unauthorized, "Session unauthorized")
+                            return@get
+                        }
+
+                        if (!active.isApproved) {
+                            call.respond(HttpStatusCode.Forbidden, "Transfer requires receiver approval")
+                            return@get
+                        }
+
+                        if (active.isCancelled) {
+                            call.respond(HttpStatusCode.Gone, "Transfer session was cancelled")
+                            return@get
+                        }
+
+                        val fileItem = active.files.find { it.id == fileId }
+                        if (fileItem == null || fileItem.uriString == null) {
+                            call.respond(HttpStatusCode.NotFound, "File not found in session")
+                            return@get
+                        }
+
+                        val uri = Uri.parse(fileItem.uriString)
+                        val inputStream: InputStream = storageManager.openInputStream(uri) ?: run {
+                            call.respond(HttpStatusCode.InternalServerError, "Cannot read file from device storage")
+                            return@get
+                        }
+
+                        val safeName = HashUtils.sanitizeFileName(fileItem.name)
+                        val encodedName = URLEncoder.encode(safeName, "UTF-8").replace("+", "%20")
+
+                        // Security headers
+                        call.response.header(HttpHeaders.AcceptRanges, "bytes")
+                        call.response.header(
+                            HttpHeaders.ContentDisposition,
+                            "attachment; filename=\"$safeName\"; filename*=UTF-8''$encodedName"
                         )
-                        return@get
-                    }
 
-                    if (System.currentTimeMillis() > active.expiresAt) {
-                        call.respondText(
-                            "<h3>Transfer session has expired.</h3>",
-                            ContentType.Text.Html,
-                            HttpStatusCode.Gone
+                        val parsedContentType = try {
+                            ContentType.parse(fileItem.mimeType)
+                        } catch (e: Exception) {
+                            ContentType.Application.OctetStream
+                        }
+
+                        val fileIndex = active.files.indexOf(fileItem)
+
+                        _transferProgress.value = _transferProgress.value.copy(
+                            currentFileId = fileItem.id,
+                            currentFileName = safeName,
+                            fileIndex = fileIndex + 1,
+                            totalFileBytes = fileItem.size,
+                            bytesTransferred = 0L,
+                            activeDownloadsCount = _transferProgress.value.activeDownloadsCount + 1
                         )
-                        return@get
-                    }
 
-                    val html = BrowserPortal.buildPortalHtml(active)
-                    call.respondText(html, ContentType.Text.Html)
-                }
+                        var transferredSoFar = 0L
+                        var lastSpeedUpdate = System.currentTimeMillis()
+                        var bytesSinceLastSpeed = 0L
+                        var currentSpeed = 0L
 
-                // API: Accept transfer
-                post("/api/v1/browser/accept/{token}") {
-                    val token = call.parameters["token"]
-                    val active = _currentSession.value
-                    if (active != null && active.token == token) {
-                        _currentSession.value = active.copy(isApproved = true)
-                        call.respond(HttpStatusCode.OK, "Approved")
-                    } else {
-                        call.respond(HttpStatusCode.NotFound, "Invalid token")
-                    }
-                }
+                        try {
+                            call.respondOutputStream(
+                                contentType = parsedContentType,
+                                contentLength = fileItem.size
+                            ) {
+                                val buffer = ByteArray(64 * 1024) // 64 KB streaming buffer
+                                var bytesRead: Int
 
-                // API: Reject transfer
-                post("/api/v1/browser/reject/{token}") {
-                    val token = call.parameters["token"]
-                    val active = _currentSession.value
-                    if (active != null && active.token == token) {
-                        _currentSession.value = active.copy(isRejected = true)
-                        call.respond(HttpStatusCode.OK, "Rejected")
-                    } else {
-                        call.respond(HttpStatusCode.NotFound, "Invalid token")
-                    }
-                }
+                                inputStream.use { input ->
+                                    while (input.read(buffer).also { bytesRead = it } != -1) {
+                                        write(buffer, 0, bytesRead)
+                                        transferredSoFar += bytesRead
+                                        bytesSinceLastSpeed += bytesRead
 
-                // API: Download file (Requires approval first!)
-                get("/api/v1/browser/download/{token}/{fileId}") {
-                    val token = call.parameters["token"]
-                    val fileId = call.parameters["fileId"]
-                    val active = _currentSession.value
+                                        val now = System.currentTimeMillis()
+                                        val elapsed = now - lastSpeedUpdate
+                                        if (elapsed >= 300) {
+                                            currentSpeed = (bytesSinceLastSpeed * 1000) / elapsed.coerceAtLeast(1)
+                                            lastSpeedUpdate = now
+                                            bytesSinceLastSpeed = 0L
 
-                    if (active == null || active.token != token) {
-                        call.respond(HttpStatusCode.Unauthorized, "Session unauthorized")
-                        return@get
-                    }
-
-                    if (!active.isApproved) {
-                        call.respond(HttpStatusCode.Forbidden, "Transfer was not approved by receiver")
-                        return@get
-                    }
-
-                    val fileItem = active.files.find { it.id == fileId }
-                    if (fileItem == null || fileItem.uriString == null) {
-                        call.respond(HttpStatusCode.NotFound, "File not found")
-                        return@get
-                    }
-
-                    val uri = Uri.parse(fileItem.uriString)
-                    val inputStream: InputStream = storageManager.openInputStream(uri) ?: run {
-                        call.respond(HttpStatusCode.InternalServerError, "Cannot read file from device storage")
-                        return@get
-                    }
-
-                    call.response.header(
-                        HttpHeaders.ContentDisposition,
-                        ContentDisposition.Attachment
-                            .withParameter(ContentDisposition.Parameters.FileName, fileItem.name)
-                            .toString()
-                    )
-                    call.respondOutputStream(
-                        contentType = ContentType.parse(fileItem.mimeType),
-                        contentLength = fileItem.size
-                    ) {
-                        val buffer = ByteArray(64 * 1024)
-                        var read: Int
-                        inputStream.use { input ->
-                            while (input.read(buffer).also { read = it } != -1) {
-                                write(buffer, 0, read)
+                                            _transferProgress.value = _transferProgress.value.copy(
+                                                bytesTransferred = transferredSoFar,
+                                                speedBytesPerSec = currentSpeed
+                                            )
+                                        }
+                                    }
+                                }
                             }
+
+                            // Transfer completed for this file
+                            val isAllDone = fileIndex + 1 >= active.files.size
+                            _transferProgress.value = _transferProgress.value.copy(
+                                bytesTransferred = fileItem.size,
+                                speedBytesPerSec = 0L,
+                                isCompleted = isAllDone,
+                                activeDownloadsCount = (_transferProgress.value.activeDownloadsCount - 1).coerceAtLeast(0)
+                            )
+
+                            // Save to transfer history database
+                            scope.launch {
+                                try {
+                                    database.transferDao().insertTransfer(
+                                        TransferEntity(
+                                            sessionId = active.token,
+                                            fileName = safeName,
+                                            fileSize = fileItem.size,
+                                            mimeType = fileItem.mimeType,
+                                            direction = "SENT",
+                                            peerName = "Browser Receiver",
+                                            status = "SUCCESS"
+                                        )
+                                    )
+                                } catch (e: Exception) {
+                                    Log.w(tag, "Failed to insert browser transfer into history", e)
+                                }
+                            }
+
+                        } catch (e: Exception) {
+                            Log.w(tag, "Client aborted or connection closed for $safeName", e)
+                            _transferProgress.value = _transferProgress.value.copy(
+                                activeDownloadsCount = (_transferProgress.value.activeDownloadsCount - 1).coerceAtLeast(0)
+                            )
                         }
                     }
                 }
-            }
-        }.start(wait = false)
-        Log.d(tag, "Browser receiver HTTP server started on port $port")
+            }.start(wait = false)
+            Log.d(tag, "Browser receiver HTTP server running on port $actualPort")
+        } catch (e: Exception) {
+            Log.e(tag, "Failed to start BrowserReceiverServer on port $actualPort", e)
+        }
+
+        return actualPort
     }
 
     fun stopSession() {
         try {
-            server?.stop(500, 1000)
+            server?.stop(200, 500)
             server = null
             _currentSession.value = null
+            _transferProgress.value = BrowserTransferProgress()
+            Log.d(tag, "Browser receiver HTTP server stopped.")
         } catch (e: Exception) {
             Log.e(tag, "Error stopping browser server", e)
         }

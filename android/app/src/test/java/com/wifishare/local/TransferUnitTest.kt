@@ -84,4 +84,44 @@ class TransferUnitTest {
         )
         assertFalse(System.currentTimeMillis() > session.expiresAt)
     }
+
+    @Test
+    fun testBrowserPortalHtml_containsSecurityAndFiles() {
+        val testFiles = listOf(
+            FileTransferItem(
+                id = "doc1",
+                name = "quarterly_report.pdf",
+                size = 2048576L,
+                mimeType = "application/pdf"
+            ),
+            FileTransferItem(
+                id = "img1",
+                name = "photo.jpg",
+                size = 5242880L,
+                mimeType = "image/jpeg"
+            )
+        )
+
+        val session = BrowserSession(
+            token = "sec_token_9876",
+            senderName = "Engineering Pixel",
+            files = testFiles,
+            totalBytes = 7291456L
+        )
+
+        val html = com.wifishare.local.browser.BrowserPortal.buildPortalHtml(session)
+
+        // Verify sender and file details are in HTML
+        assertTrue("Must contain sender name", html.contains("Engineering Pixel"))
+        assertTrue("Must contain file name 1", html.contains("quarterly_report.pdf"))
+        assertTrue("Must contain file name 2", html.contains("photo.jpg"))
+        assertTrue("Must contain token endpoint", html.contains("sec_token_9876"))
+        assertTrue("Must have accept API endpoint", html.contains("/api/v1/browser/accept/"))
+        assertTrue("Must have reject API endpoint", html.contains("/api/v1/browser/reject/"))
+        assertTrue("Must have download API endpoint", html.contains("/api/v1/browser/download/"))
+        assertTrue("Must contain responsive viewport", html.contains("viewport"))
+        // Zero external script or font dependencies
+        assertFalse("No external CDN scripts", html.contains("https://cdn"))
+        assertFalse("No external Google fonts", html.contains("fonts.googleapis.com"))
+    }
 }

@@ -26,6 +26,7 @@ fun SendScreen(
     onClearFiles: () -> Unit,
     onStartTransfer: () -> Unit,
     onSelectTargetDevice: () -> Unit,
+    onShareToBrowser: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     // Open system file picker using SAF
@@ -219,18 +220,37 @@ fun SendScreen(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // Transfer Action Button
-        Button(
-            onClick = onStartTransfer,
-            enabled = selectedFiles.isNotEmpty() && targetDevice != null,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(52.dp),
-            shape = RoundedCornerShape(12.dp)
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Icon(imageVector = Icons.Default.Send, contentDescription = null)
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Send ${selectedFiles.size} File(s) ($totalMb MB)")
+            // Transfer Action Button for App Peer
+            Button(
+                onClick = onStartTransfer,
+                enabled = selectedFiles.isNotEmpty() && targetDevice != null,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(imageVector = Icons.Default.Send, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Send to App Peer ($totalMb MB)")
+            }
+
+            // Direct Browser Share QR Button
+            OutlinedButton(
+                onClick = onShareToBrowser,
+                enabled = selectedFiles.isNotEmpty(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(imageVector = Icons.Default.QrCodeScanner, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Share via Browser QR (No App Needed)")
+            }
         }
     }
 }
