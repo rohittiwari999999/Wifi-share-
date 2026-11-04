@@ -25,11 +25,11 @@ android {
 
     signingConfigs {
         create("release") {
-            val keystoreEnv = System.getenv("KEYSTORE_FILE") ?: "release.jks"
+            val envKeystore = System.getenv("KEYSTORE_FILE")?.takeIf { it.isNotBlank() } ?: "release.jks"
             val candidates = listOf(
-                file(keystoreEnv),
-                rootProject.file(keystoreEnv),
-                file("../$keystoreEnv"),
+                file(envKeystore),
+                rootProject.file(envKeystore),
+                file("../$envKeystore"),
                 file("release.jks"),
                 rootProject.file("release.jks"),
                 file("../release.jks")
@@ -37,9 +37,9 @@ android {
             val foundKeystore = candidates.firstOrNull { it.exists() }
             if (foundKeystore != null) {
                 storeFile = foundKeystore
-                storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "android"
-                keyAlias = System.getenv("KEY_ALIAS") ?: "release"
-                keyPassword = System.getenv("KEY_PASSWORD") ?: "android"
+                storePassword = System.getenv("KEYSTORE_PASSWORD")?.takeIf { it.isNotBlank() } ?: "android"
+                keyAlias = System.getenv("KEY_ALIAS")?.takeIf { it.isNotBlank() } ?: "release"
+                keyPassword = System.getenv("KEY_PASSWORD")?.takeIf { it.isNotBlank() } ?: "android"
             } else {
                 // Safe fallback: inherit from debug signing so assembleRelease never crashes
                 val debugKeystore = file("${System.getProperty("user.home")}/.android/debug.keystore")
@@ -86,6 +86,15 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
             excludes += "META-INF/INDEX.LIST"
             excludes += "META-INF/io.netty.versions.properties"
+            excludes += "META-INF/DEPENDENCIES"
+            excludes += "META-INF/LICENSE"
+            excludes += "META-INF/LICENSE.txt"
+            excludes += "META-INF/license.txt"
+            excludes += "META-INF/NOTICE"
+            excludes += "META-INF/NOTICE.txt"
+            excludes += "META-INF/notice.txt"
+            excludes += "META-INF/ASL2.0"
+            excludes += "META-INF/*.kotlin_module"
         }
     }
 }

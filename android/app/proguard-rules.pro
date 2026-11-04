@@ -25,3 +25,10 @@
 # Room
 -dontwarn androidx.room.**
 -keep class * extends androidx.room.RoomDatabase
+
+# Optional Netty / JDK internal reflection warnings
+-dontwarn javax.annotation.**
+-dontwarn sun.misc.**
+-dontwarn java.lang.invoke.**
+-dontwarn org.conscrypt.**
+-dontwarn org.bouncycastle.**

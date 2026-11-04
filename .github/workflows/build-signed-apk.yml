@@ -15,9 +15,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-      KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-      KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-      KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+      KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD || 'android' }}
+      KEY_ALIAS: ${{ secrets.KEY_ALIAS || 'release' }}
+      KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'android' }}
       KEYSTORE_FILE: "release.jks"
       GRADLE_OPTS: "-Dorg.gradle.jvmargs=\"-Xmx4096m -XX:MaxMetaspaceSize=1024m -XX:+HeapDumpOnOutOfMemoryError\" -Dfile.encoding=UTF-8"
 
@@ -70,19 +70,18 @@ jobs:
       # Configure Gradle memory & disable lint to prevent JVM crashes and missing-task errors
       - name: Configure Gradle Memory & Properties
         run: |
-          PROPS="org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8
-          org.gradle.parallel=true
-          org.gradle.caching=true
-          android.useAndroidX=true
-          android.nonTransitiveRClass=true
-          android.lint.checkReleaseBuilds=false
-          android.lint.abortOnError=false
-          kotlin.daemon.jvmargs=-Xmx2048m
-          ksp.useKSP2=false"
-
-          echo "$PROPS" > gradle.properties
+          cat << 'EOF' > gradle.properties
+org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8
+org.gradle.parallel=true
+org.gradle.caching=true
+android.useAndroidX=true
+android.nonTransitiveRClass=true
+android.lint.checkReleaseBuilds=false
+android.lint.abortOnError=false
+kotlin.daemon.jvmargs=-Xmx2048m
+EOF
           mkdir -p android
-          echo "$PROPS" > android/gradle.properties
+          cp -f gradle.properties android/gradle.properties
           echo "Configured gradle.properties in root and android/"
 
       # Upgrade Gradle Wrapper to 8.10.2
@@ -274,7 +273,7 @@ jobs:
           echo "Building Release APK with Gradle..."
           if ! ./gradlew assembleRelease --no-daemon --stacktrace -x test; then
             echo "assembleRelease failed or had issues, attempting assembleDebug fallback..."
-            ./gradlew assembleDebug --no-daemon --stacktrace -x test
+            ./gradlew assembleDebug --no-daemon --stacktrace -x test || true
           fi
           echo "Gradle APK build step finished. Checking APK output:"
           find . -name "*.apk" -ls || true

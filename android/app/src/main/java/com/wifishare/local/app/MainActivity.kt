@@ -8,15 +8,17 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
 import com.wifishare.local.core.permissions.PermissionManager
 import com.wifishare.local.data.model.DeviceInfo
@@ -58,7 +60,7 @@ class MainActivity : ComponentActivity() {
         val allGranted = results.values.all { it }
         if (!allGranted) {
             Log.w(tag, "Some permissions were not granted: $results")
-            Toast.makeText(this, "Local network & storage permissions are recommended for full transfer support", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Storage and Wi-Fi permissions are recommended for full transfer support", Toast.LENGTH_LONG).show()
         } else {
             Log.i(tag, "All requested permissions granted successfully.")
         }
@@ -94,20 +96,14 @@ class MainActivity : ComponentActivity() {
                 val activeBrowserSession by app.transferManager.browserServer.currentSession.collectAsState()
                 val browserProgress by app.transferManager.browserServer.transferProgress.collectAsState()
                 var showBrowserModal by remember { mutableStateOf(false) }
+                var showBrowserSourceDialog by remember { mutableStateOf(false) }
 
                 // Check and process any incoming shared files from Android Gallery
                 val incomingUris by pendingIntentUris
                 LaunchedEffect(incomingUris) {
                     if (incomingUris.isNotEmpty()) {
                         Log.i(tag, "Processing ${incomingUris.size} incoming intent URIs from Gallery")
-                        val items = mutableListOf<FileTransferItem>()
-                        for (uri in incomingUris) {
-                            try {
-                                app.storageManager.queryFileMetadata(uri)?.let { items.add(it) }
-                            } catch (t: Throwable) {
-                                Log.e(tag, "Error processing incoming intent URI: $uri", t)
-                            }
-                        }
+                        val items = incomingUris.map { app.storageManager.queryFileMetadata(it) }
                         if (items.isNotEmpty()) {
                             selectedFiles = selectedFiles + items
                             currentScreen = Screen.SEND
@@ -117,31 +113,31 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                // File picker for Browser Share workflow
+                // Dedicated Photo Picker for Browser Share (Photos & Videos)
+                val browserPhotoPicker = rememberLauncherForActivityResult(
+                    contract = ActivityResultContracts.PickMultipleVisualMedia()
+                ) { uris ->
+                    Log.i(tag, "browserPhotoPicker callback received ${uris.size} URIs")
+                    if (uris.isNotEmpty()) {
+                        val items = uris.map { app.storageManager.queryFileMetadata(it) }
+                        Log.i(tag, "browserPhotoPicker: extracted ${items.size} items from Gallery. Launching Browser Share session.")
+                        selectedFiles = items
+                        app.transferManager.startBrowserSession(appSettings.deviceName, items)
+                        showBrowserModal = true
+                    }
+                }
+
+                // Document / File picker for Browser Share workflow
                 val browserFilePicker = rememberLauncherForActivityResult(
                     contract = ActivityResultContracts.OpenMultipleDocuments()
                 ) { uris ->
                     Log.i(tag, "browserFilePicker callback received ${uris.size} URIs")
                     if (uris.isNotEmpty()) {
-                        val items = mutableListOf<FileTransferItem>()
-                        for (uri in uris) {
-                            try {
-                                Log.d(tag, "browserFilePicker extracting metadata for: $uri")
-                                app.storageManager.queryFileMetadata(uri)?.let { items.add(it) }
-                            } catch (t: Throwable) {
-                                Log.e(tag, "FATAL error in browserFilePicker for URI: $uri", t)
-                            }
-                        }
-
-                        if (items.isNotEmpty()) {
-                            Log.i(tag, "browserFilePicker: successfully extracted ${items.size} items. Launching Browser Share session.")
-                            selectedFiles = items
-                            app.transferManager.startBrowserSession(appSettings.deviceName, items)
-                            showBrowserModal = true
-                        } else {
-                            Log.w(tag, "browserFilePicker: 0 items extracted from ${uris.size} URIs")
-                            Toast.makeText(this@MainActivity, "Could not open selected files", Toast.LENGTH_SHORT).show()
-                        }
+                        val items = uris.map { app.storageManager.queryFileMetadata(it) }
+                        Log.i(tag, "browserFilePicker: extracted ${items.size} items. Launching Browser Share session.")
+                        selectedFiles = items
+                        app.transferManager.startBrowserSession(appSettings.deviceName, items)
+                        showBrowserModal = true
                     }
                 }
 
@@ -193,8 +189,8 @@ class MainActivity : ComponentActivity() {
                                 onNavigateToSend = { currentScreen = Screen.SEND },
                                 onNavigateToReceive = { currentScreen = Screen.RECEIVE },
                                 onNavigateToBrowserShare = {
-                                    Log.i(tag, "HomeScreen: onNavigateToBrowserShare clicked. Launching browserFilePicker.")
-                                    browserFilePicker.launch(arrayOf("*/*"))
+                                    Log.i(tag, "HomeScreen: onNavigateToBrowserShare clicked. Opening file source dialog.")
+                                    showBrowserSourceDialog = true
                                 },
                                 onNavigateToDevices = { currentScreen = Screen.DEVICES }
                             )
@@ -219,21 +215,9 @@ class MainActivity : ComponentActivity() {
                                 selectedFiles = selectedFiles,
                                 onAddFiles = { uris ->
                                     Log.i(tag, "SendScreen: onAddFiles callback received ${uris.size} URIs: $uris")
-                                    val newItems = mutableListOf<FileTransferItem>()
-                                    for (uri in uris) {
-                                        try {
-                                            Log.d(tag, "onAddFiles extracting metadata for URI: $uri")
-                                            app.storageManager.queryFileMetadata(uri)?.let { newItems.add(it) }
-                                        } catch (t: Throwable) {
-                                            Log.e(tag, "FATAL error in onAddFiles for URI: $uri", t)
-                                        }
-                                    }
-                                    if (newItems.isNotEmpty()) {
-                                        Log.i(tag, "onAddFiles successfully extracted ${newItems.size} items. Updating selectedFiles.")
-                                        selectedFiles = selectedFiles + newItems
-                                    } else {
-                                        Log.w(tag, "onAddFiles: 0 items extracted.")
-                                    }
+                                    val newItems = uris.map { app.storageManager.queryFileMetadata(it) }
+                                    Log.i(tag, "onAddFiles successfully extracted ${newItems.size} items. Updating selectedFiles.")
+                                    selectedFiles = selectedFiles + newItems
                                 },
                                 onRemoveFile = { item ->
                                     selectedFiles = selectedFiles.filter { it.id != item.id }
@@ -310,6 +294,57 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                // File Source Choice Dialog for Browser Share
+                if (showBrowserSourceDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showBrowserSourceDialog = false },
+                        title = {
+                            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                                Icon(Icons.Default.QrCodeScanner, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Send to Browser")
+                            }
+                        },
+                        text = {
+                            Text("Choose where you want to select files from to share with the browser:")
+                        },
+                        confirmButton = {
+                            Button(
+                                onClick = {
+                                    showBrowserSourceDialog = false
+                                    try {
+                                        browserPhotoPicker.launch(
+                                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
+                                        )
+                                    } catch (e: Exception) {
+                                        Log.w(tag, "PhotoPicker fallback to browserFilePicker", e)
+                                        browserFilePicker.launch(arrayOf("image/*", "video/*"))
+                                    }
+                                },
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Icon(Icons.Default.PhotoLibrary, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Gallery (Photos/Videos)")
+                            }
+                        },
+                        dismissButton = {
+                            OutlinedButton(
+                                onClick = {
+                                    showBrowserSourceDialog = false
+                                    browserFilePicker.launch(arrayOf("*/*"))
+                                },
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("All Files / Docs")
+                            }
+                        }
+                    )
+                }
+
+                // Active Browser Share Modal with QR code and live streaming metrics
                 if (showBrowserModal && activeBrowserSession != null) {
                     BrowserShareModal(
                         session = activeBrowserSession!!,
