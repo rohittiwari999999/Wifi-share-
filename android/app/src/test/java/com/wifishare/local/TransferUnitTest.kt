@@ -124,4 +124,29 @@ class TransferUnitTest {
         assertFalse("No external CDN scripts", html.contains("https://cdn"))
         assertFalse("No external Google fonts", html.contains("fonts.googleapis.com"))
     }
+
+    @Test
+    fun testFileSelectionQueue_handlesSpecialCharactersAndSizes() {
+        val rawName = "DCIM/Camera/IMG_20261103_102434:backup<orig>.jpg"
+        val cleanName = HashUtils.sanitizeFileName(rawName)
+
+        // Verify all illegal path traversal and filesystem characters are replaced
+        assertFalse(cleanName.contains("/"))
+        assertFalse(cleanName.contains(":"))
+        assertFalse(cleanName.contains("<"))
+        assertFalse(cleanName.contains(">"))
+
+        val item = FileTransferItem(
+            id = "test_item_1",
+            name = cleanName,
+            size = 15360000L,
+            mimeType = "image/jpeg",
+            uriString = "content://media/external/images/media/42"
+        )
+
+        assertEquals("test_item_1", item.id)
+        assertTrue(item.size > 0L)
+        assertEquals("image/jpeg", item.mimeType)
+        assertTrue(item.uriString!!.startsWith("content://"))
+    }
 }

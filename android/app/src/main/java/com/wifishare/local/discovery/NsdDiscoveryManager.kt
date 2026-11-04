@@ -41,6 +41,7 @@ class NsdDiscoveryManager(private val context: Context) {
     private var registrationListener: NsdManager.RegistrationListener? = null
     private var discoveryListener: NsdManager.DiscoveryListener? = null
     private var registeredServiceName: String? = null
+    private var activePort: Int = DEFAULT_SERVER_PORT
 
     // Multicast Lock to prevent Android Wi-Fi driver from dropping mDNS packets
     private var multicastLock: WifiManager.MulticastLock? = null
@@ -51,6 +52,28 @@ class NsdDiscoveryManager(private val context: Context) {
 
     private val discoveryScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var subnetScanJob: Job? = null
+
+    /**
+     * Resolves all local IPv4 addresses across all active interfaces (WLAN, AP, hotspot, eth, loopback)
+     * so that the local device never identifies itself as a peer.
+     */
+    fun getAllLocalIpv4Addresses(): Set<String> {
+        val ips = mutableSetOf("127.0.0.1", "localhost")
+        try {
+            val interfaces = NetworkInterface.getNetworkInterfaces() ?: return ips
+            for (intf in interfaces) {
+                if (!intf.isUp) continue
+                for (addr in intf.inetAddresses) {
+                    if (addr is Inet4Address) {
+                        addr.hostAddress?.let { ips.add(it) }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.d(tag, "Error reading local interface addresses: ${e.message}")
+        }
+        return ips
+    }
 
     private fun acquireMulticastLock() {
         try {
@@ -84,6 +107,7 @@ class NsdDiscoveryManager(private val context: Context) {
      */
     fun startAdvertising(deviceName: String, port: Int = DEFAULT_SERVER_PORT) {
         if (_isAdvertising.value) return
+        activePort = port
 
         acquireMulticastLock()
 
@@ -180,8 +204,11 @@ class NsdDiscoveryManager(private val context: Context) {
                 val serviceType = serviceInfo.serviceType ?: ""
                 Log.d(tag, "Service found: name=$serviceName, type=$serviceType")
 
-                // Ignore self
-                if (registeredServiceName != null && serviceName == registeredServiceName) return
+                // Ignore self by registered service name
+                if (registeredServiceName != null && (serviceName == registeredServiceName || serviceName.startsWith(registeredServiceName!!))) {
+                    Log.d(tag, "Ignoring self mDNS service: $serviceName")
+                    return
+                }
 
                 val isWiFiShare = serviceType.contains("wifishare", ignoreCase = true) ||
                         serviceName.startsWith("WiFiShare", ignoreCase = true)
@@ -244,6 +271,14 @@ class NsdDiscoveryManager(private val context: Context) {
                     try {
                         val host = resolvedInfo.host?.hostAddress ?: return
                         val port = resolvedInfo.port
+
+                        // Exclude self device by IP
+                        val localIps = getAllLocalIpv4Addresses()
+                        if (localIps.contains(host)) {
+                            Log.d(tag, "Excluding self device at $host:$port from discovery")
+                            return
+                        }
+
                         val rawName = resolvedInfo.serviceName ?: "Unknown"
                         val cleanName = rawName.removePrefix("WiFiShare-")
 
@@ -260,7 +295,7 @@ class NsdDiscoveryManager(private val context: Context) {
                         _discoveredDevices.update { current ->
                             current + (device.id to device)
                         }
-                        Log.d(tag, "Resolved device: ${device.name} at ${device.ipAddress}:${device.port}")
+                        Log.d(tag, "Resolved remote device: ${device.name} at ${device.ipAddress}:${device.port}")
                     } finally {
                         synchronized(resolveQueue) {
                             isResolving = false
@@ -284,17 +319,19 @@ class NsdDiscoveryManager(private val context: Context) {
     fun triggerSubnetScan() {
         subnetScanJob?.cancel()
         subnetScanJob = discoveryScope.launch {
-            val myIp = getLocalIpv4Address() ?: return@launch
-            val dotIndex = myIp.lastIndexOf('.')
+            val localIps = getAllLocalIpv4Addresses()
+            val myPrimaryIp = getLocalIpv4Address() ?: return@launch
+            val dotIndex = myPrimaryIp.lastIndexOf('.')
             if (dotIndex == -1) return@launch
-            val subnetPrefix = myIp.substring(0, dotIndex + 1) // e.g. "192.168.1."
+            val subnetPrefix = myPrimaryIp.substring(0, dotIndex + 1) // e.g. "192.168.1."
 
             val json = Json { ignoreUnknownKeys = true }
 
             (1..254).map { host ->
                 async(Dispatchers.IO) {
                     val targetIp = "$subnetPrefix$host"
-                    if (targetIp == myIp) return@async
+                    // Strict exclusion of all local device IPs
+                    if (localIps.contains(targetIp)) return@async
 
                     // Rapid socket check on default server port
                     var socket: Socket? = null
@@ -325,7 +362,7 @@ class NsdDiscoveryManager(private val context: Context) {
                                 lastSeenTimestamp = System.currentTimeMillis()
                             )
                             _discoveredDevices.update { it + (peer.id to peer) }
-                            Log.d(tag, "Subnet probe found peer: ${peer.name} at ${peer.ipAddress}")
+                            Log.d(tag, "Subnet probe found remote peer: ${peer.name} at ${peer.ipAddress}")
                         }
                         conn.disconnect()
                     } catch (e: Exception) {
@@ -377,6 +414,12 @@ class NsdDiscoveryManager(private val context: Context) {
      */
     fun addManualDevice(name: String, ipAddress: String, port: Int = DEFAULT_SERVER_PORT) {
         val cleanIp = ipAddress.trim()
+        val localIps = getAllLocalIpv4Addresses()
+        if (localIps.contains(cleanIp)) {
+            Log.w(tag, "Refusing to manually add self IP $cleanIp as remote device")
+            return
+        }
+
         val id = "$cleanIp:$port"
         val device = DeviceInfo(
             id = id,

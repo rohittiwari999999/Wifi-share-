@@ -2,9 +2,12 @@ package com.wifishare.local.core.storage
 
 import android.content.ContentResolver
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.os.Environment
 import android.provider.OpenableColumns
+import android.util.Log
+import android.webkit.MimeTypeMap
 import com.wifishare.local.core.security.HashUtils
 import com.wifishare.local.data.model.FileTransferItem
 import kotlinx.coroutines.Dispatchers
@@ -17,44 +20,158 @@ import java.util.UUID
 
 class StorageManager(private val context: Context) {
 
+    private val tag = "StorageManager"
     private val contentResolver: ContentResolver = context.contentResolver
 
     /**
-     * Extracts metadata (name, size, mimeType) from a content Uri using SAF.
+     * Extracts metadata (name, size, mimeType) from a content Uri using SAF or MediaStore.
+     * Hardened against SecurityException, null projection crashes, and CursorWindow null read crashes.
      */
     fun queryFileMetadata(uri: Uri): FileTransferItem? {
-        var name = "unknown_file_${System.currentTimeMillis()}"
+        Log.i(tag, "--> queryFileMetadata invoked for URI: $uri [scheme=${uri.scheme}, authority=${uri.authority}]")
+
+        // Safely take persistable URI permission if offered by the intent
+        try {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+            Log.d(tag, "Persistable URI permission acquired for: $uri")
+        } catch (e: SecurityException) {
+            Log.d(tag, "URI is not persistable (normal for Gallery / transient picker URIs): ${e.message}")
+        } catch (t: Throwable) {
+            Log.w(tag, "Non-fatal error taking persistable URI permission", t)
+        }
+
+        var name = "file_${System.currentTimeMillis()}"
         var size = 0L
-        val mimeType = contentResolver.getType(uri) ?: "application/octet-stream"
 
-        contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-            if (cursor.moveToFirst()) {
-                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+        // Safely resolve MIME type
+        var mimeType = try {
+            contentResolver.getType(uri) ?: "application/octet-stream"
+        } catch (e: Exception) {
+            Log.w(tag, "Could not resolve MIME type via contentResolver.getType($uri): ${e.message}")
+            "application/octet-stream"
+        }
 
-                if (nameIndex != -1) {
-                    name = cursor.getString(nameIndex) ?: name
+        // CRITICAL: Explicit projection containing ONLY OpenableColumns.
+        // Passing 'null' projection crashes on Android Gallery / MediaStore with SecurityException
+        // because it attempts to query restricted columns (e.g. '_data') without full storage permissions!
+        val openableProjection = arrayOf(
+            OpenableColumns.DISPLAY_NAME,
+            OpenableColumns.SIZE
+        )
+
+        try {
+            contentResolver.query(uri, openableProjection, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+
+                    if (nameIndex != -1 && !cursor.isNull(nameIndex)) {
+                        try {
+                            val extractedName = cursor.getString(nameIndex)
+                            if (!extractedName.isNullOrBlank()) {
+                                name = extractedName
+                                Log.d(tag, "Resolved display name from cursor: $name")
+                            }
+                        } catch (e: Exception) {
+                            Log.w(tag, "Failed to read DISPLAY_NAME from cursor: ${e.message}")
+                        }
+                    }
+
+                    if (sizeIndex != -1 && !cursor.isNull(sizeIndex)) {
+                        try {
+                            size = cursor.getLong(sizeIndex)
+                            Log.d(tag, "Resolved size from cursor: $size bytes")
+                        } catch (e: Exception) {
+                            Log.w(tag, "Failed to read SIZE from cursor: ${e.message}")
+                        }
+                    }
+                } else {
+                    Log.w(tag, "Cursor for $uri is empty (moveToFirst == false)")
                 }
-                if (sizeIndex != -1) {
-                    size = cursor.getLong(sizeIndex)
+            }
+        } catch (se: SecurityException) {
+            Log.e(tag, "SecurityException while querying OpenableColumns for URI: $uri. Falling back to alternative metadata extraction.", se)
+        } catch (t: Throwable) {
+            Log.e(tag, "Unexpected error querying OpenableColumns for URI: $uri", t)
+        }
+
+        // Fallback 1: If size could not be read from cursor (e.g. Google Photos cloud / MediaStore null size)
+        if (size <= 0L) {
+            try {
+                contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                    val statSize = pfd.statSize
+                    if (statSize > 0L) {
+                        size = statSize
+                        Log.d(tag, "Resolved size via openFileDescriptor: $size bytes")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.d(tag, "openFileDescriptor size probe failed for $uri: ${e.message}")
+            }
+        }
+
+        // Fallback 2: Estimate from stream if still 0
+        if (size <= 0L) {
+            try {
+                contentResolver.openInputStream(uri)?.use { stream ->
+                    val available = stream.available().toLong()
+                    if (available > 0L) {
+                        size = available
+                        Log.d(tag, "Estimated size via stream.available(): $size bytes")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.d(tag, "openInputStream size probe failed for $uri: ${e.message}")
+            }
+        }
+
+        // Fallback 3: Name from URI path segment if default
+        if (name.startsWith("file_") || name.startsWith("unknown_file_")) {
+            val lastSegment = uri.lastPathSegment
+            if (!lastSegment.isNullOrBlank()) {
+                val cleanSegment = lastSegment.substringAfterLast('/')
+                if (cleanSegment.isNotBlank() && cleanSegment.contains('.')) {
+                    name = cleanSegment
+                    Log.d(tag, "Fallback name extracted from URI lastPathSegment: $name")
                 }
             }
         }
 
-        return FileTransferItem(
+        // Fallback 4: Append extension based on MIME type if missing
+        if (!name.contains('.')) {
+            val ext = MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType)
+            if (!ext.isNullOrBlank()) {
+                name = "$name.$ext"
+                Log.d(tag, "Appended MIME extension: $name")
+            }
+        }
+
+        val sanitizedName = HashUtils.sanitizeFileName(name)
+        val fileItem = FileTransferItem(
             id = UUID.randomUUID().toString(),
-            name = HashUtils.sanitizeFileName(name),
+            name = sanitizedName,
             size = size,
             mimeType = mimeType,
             uriString = uri.toString()
         )
+
+        Log.i(tag, "<-- Successfully extracted FileTransferItem: id=${fileItem.id}, name=${fileItem.name}, size=${fileItem.size} bytes, mime=${fileItem.mimeType}")
+        return fileItem
     }
 
     /**
      * Opens an input stream for reading the file content.
      */
     fun openInputStream(uri: Uri): InputStream? {
-        return contentResolver.openInputStream(uri)
+        return try {
+            contentResolver.openInputStream(uri)
+        } catch (e: Exception) {
+            Log.e(tag, "Error opening InputStream for URI: $uri", e)
+            null
+        }
     }
 
     /**

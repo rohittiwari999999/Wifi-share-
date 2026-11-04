@@ -1,7 +1,9 @@
 package com.wifishare.local.ui.send
 
 import android.net.Uri
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -29,12 +31,33 @@ fun SendScreen(
     onShareToBrowser: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    // Open system file picker using SAF
+    val tag = "SendScreen"
+
+    // Document / File Picker using SAF
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris ->
+        Log.i(tag, "filePickerLauncher callback received ${uris.size} URIs: $uris")
         if (uris.isNotEmpty()) {
-            onAddFiles(uris)
+            try {
+                onAddFiles(uris)
+            } catch (t: Throwable) {
+                Log.e(tag, "FATAL error in filePickerLauncher onAddFiles callback", t)
+            }
+        }
+    }
+
+    // Modern Android Photo Picker (Gallery)
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia()
+    ) { uris ->
+        Log.i(tag, "photoPickerLauncher callback received ${uris.size} URIs: $uris")
+        if (uris.isNotEmpty()) {
+            try {
+                onAddFiles(uris)
+            } catch (t: Throwable) {
+                Log.e(tag, "FATAL error in photoPickerLauncher onAddFiles callback", t)
+            }
         }
     }
 
@@ -96,7 +119,7 @@ fun SendScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = "Selected Files (${selectedFiles.size})",
                     style = MaterialTheme.typography.titleMedium,
@@ -109,7 +132,7 @@ fun SendScreen(
                 )
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (selectedFiles.isNotEmpty()) {
                     IconButton(onClick = onClearFiles) {
                         Icon(
@@ -120,14 +143,41 @@ fun SendScreen(
                     }
                 }
 
-                Button(onClick = { filePickerLauncher.launch(arrayOf("*/*")) }) {
+                // Gallery / Photos button
+                FilledTonalButton(
+                    onClick = {
+                        try {
+                            photoPickerLauncher.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
+                            )
+                        } catch (e: Exception) {
+                            Log.w(tag, "PhotoPicker unavailable, launching document picker fallback", e)
+                            filePickerLauncher.launch(arrayOf("image/*", "video/*"))
+                        }
+                    },
+                    contentPadding = PaddingValues(horizontal = 12.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PhotoLibrary,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Gallery")
+                }
+
+                // General Files button
+                Button(
+                    onClick = { filePickerLauncher.launch(arrayOf("*/*")) },
+                    contentPadding = PaddingValues(horizontal = 12.dp)
+                ) {
                     Icon(
                         imageVector = Icons.Default.AttachFile,
                         contentDescription = null,
                         modifier = Modifier.size(18.dp)
                     )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Add Files")
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Files")
                 }
             }
         }
@@ -157,7 +207,7 @@ fun SendScreen(
                         color = MaterialTheme.colorScheme.onBackground
                     )
                     Text(
-                        text = "Tap 'Add Files' to select photos, videos, PDFs, or documents.",
+                        text = "Tap 'Gallery' to pick photos/videos, or 'Files' for any documents.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
                     )
