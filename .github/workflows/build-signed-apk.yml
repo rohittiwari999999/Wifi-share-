@@ -70,16 +70,15 @@ jobs:
       # Configure Gradle memory & disable lint to prevent JVM crashes and missing-task errors
       - name: Configure Gradle Memory & Properties
         run: |
-          cat << 'EOF' > gradle.properties
-org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8
-org.gradle.parallel=true
-org.gradle.caching=true
-android.useAndroidX=true
-android.nonTransitiveRClass=true
-android.lint.checkReleaseBuilds=false
-android.lint.abortOnError=false
-kotlin.daemon.jvmargs=-Xmx2048m
-EOF
+          printf "%s\n" \
+            "org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8" \
+            "org.gradle.parallel=true" \
+            "org.gradle.caching=true" \
+            "android.useAndroidX=true" \
+            "android.nonTransitiveRClass=true" \
+            "android.lint.checkReleaseBuilds=false" \
+            "android.lint.abortOnError=false" \
+            "kotlin.daemon.jvmargs=-Xmx2048m" > gradle.properties
           mkdir -p android
           cp -f gradle.properties android/gradle.properties
           echo "Configured gradle.properties in root and android/"
