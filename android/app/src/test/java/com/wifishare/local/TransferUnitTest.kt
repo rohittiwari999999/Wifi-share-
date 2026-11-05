@@ -27,7 +27,7 @@ class TransferUnitTest {
         val sanitized = HashUtils.sanitizeFileName(dangerous)
         assertFalse(sanitized.contains("/"))
         assertFalse(sanitized.contains("\\"))
-        assertEquals("......etc_passwd", sanitized)
+        assertEquals(".._.._.._etc_passwd", sanitized)
 
         val windowsPath = "C:\\Windows\\System32\\file.exe"
         val sanitizedWin = HashUtils.sanitizeFileName(windowsPath)

@@ -43,10 +43,20 @@ object HashUtils {
     }
 
     /**
-     * Sanitizes filename to prevent directory traversal or unsafe characters.
+     * Sanitizes filename to prevent directory traversal or unsafe filesystem characters.
+     * Uses explicit character matching (no regex) to prevent any PatternSyntaxException.
      */
     fun sanitizeFileName(fileName: String): String {
-        val clean = fileName.replace(Regex("[/\\\\?%*:|\"<>\\0]"), "_").trim()
+        val illegalChars = setOf('/', '\\', '?', '%', '*', ':', '|', '"', '<', '>', '\u0000')
+        val clean = buildString {
+            for (ch in fileName) {
+                if (ch in illegalChars || ch.code < 32) {
+                    append('_')
+                } else {
+                    append(ch)
+                }
+            }
+        }.trim()
         return clean.ifEmpty { "download_${System.currentTimeMillis()}" }
     }
 }
