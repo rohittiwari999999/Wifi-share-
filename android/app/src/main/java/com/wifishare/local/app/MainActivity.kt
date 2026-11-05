@@ -34,6 +34,8 @@ import com.wifishare.local.ui.settings.SettingsScreen
 import com.wifishare.local.ui.theme.WiFiShareTheme
 import com.wifishare.local.ui.transfer.TransferScreen
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 
 enum class Screen(val title: String, val icon: ImageVector) {
     HOME("Home", Icons.Default.Home),
@@ -98,12 +100,16 @@ class MainActivity : ComponentActivity() {
                 var showBrowserModal by remember { mutableStateOf(false) }
                 var showBrowserSourceDialog by remember { mutableStateOf(false) }
 
+                val coroutineScope = rememberCoroutineScope()
+
                 // Check and process any incoming shared files from Android Gallery
                 val incomingUris by pendingIntentUris
                 LaunchedEffect(incomingUris) {
                     if (incomingUris.isNotEmpty()) {
                         Log.i(tag, "Processing ${incomingUris.size} incoming intent URIs from Gallery")
-                        val items = incomingUris.map { app.storageManager.queryFileMetadata(it) }
+                        val items = withContext(Dispatchers.IO) {
+                            incomingUris.map { app.storageManager.processFileUriWithDiagnostics(it) }
+                        }
                         if (items.isNotEmpty()) {
                             selectedFiles = selectedFiles + items
                             currentScreen = Screen.SEND
@@ -117,13 +123,27 @@ class MainActivity : ComponentActivity() {
                 val browserPhotoPicker = rememberLauncherForActivityResult(
                     contract = ActivityResultContracts.PickMultipleVisualMedia()
                 ) { uris ->
-                    Log.i(tag, "browserPhotoPicker callback received ${uris.size} URIs")
+                    Log.i(tag, "[TEST A] browserPhotoPicker callback received ${uris.size} URIs: ${uris.map { it.toString() }}")
                     if (uris.isNotEmpty()) {
-                        val items = uris.map { app.storageManager.queryFileMetadata(it) }
-                        Log.i(tag, "browserPhotoPicker: extracted ${items.size} items from Gallery. Launching Browser Share session.")
-                        selectedFiles = items
-                        app.transferManager.startBrowserSession(appSettings.deviceName, items)
-                        showBrowserModal = true
+                        coroutineScope.launch {
+                            try {
+                                val items = withContext(Dispatchers.IO) {
+                                    uris.map { uri -> app.storageManager.processFileUriWithDiagnostics(uri) }
+                                }
+                                Log.i(tag, "[TEST E] Adding ${items.size} items to selectedFiles queue")
+                                selectedFiles = items
+
+                                Log.i(tag, "[TEST F] Starting Browser Receiver session in background...")
+                                withContext(Dispatchers.IO) {
+                                    app.transferManager.startBrowserSession(appSettings.deviceName, items)
+                                }
+                                Log.i(tag, "[TEST F] Browser Receiver session running successfully. Opening modal.")
+                                showBrowserModal = true
+                            } catch (t: Throwable) {
+                                Log.e(tag, "FATAL error in browserPhotoPicker processing pipeline: ${t.javaClass.simpleName}: ${t.message}", t)
+                                Toast.makeText(this@MainActivity, "Could not prepare files: ${t.message}", Toast.LENGTH_LONG).show()
+                            }
+                        }
                     }
                 }
 
@@ -131,13 +151,27 @@ class MainActivity : ComponentActivity() {
                 val browserFilePicker = rememberLauncherForActivityResult(
                     contract = ActivityResultContracts.OpenMultipleDocuments()
                 ) { uris ->
-                    Log.i(tag, "browserFilePicker callback received ${uris.size} URIs")
+                    Log.i(tag, "[TEST A] browserFilePicker callback received ${uris.size} URIs: ${uris.map { it.toString() }}")
                     if (uris.isNotEmpty()) {
-                        val items = uris.map { app.storageManager.queryFileMetadata(it) }
-                        Log.i(tag, "browserFilePicker: extracted ${items.size} items. Launching Browser Share session.")
-                        selectedFiles = items
-                        app.transferManager.startBrowserSession(appSettings.deviceName, items)
-                        showBrowserModal = true
+                        coroutineScope.launch {
+                            try {
+                                val items = withContext(Dispatchers.IO) {
+                                    uris.map { uri -> app.storageManager.processFileUriWithDiagnostics(uri) }
+                                }
+                                Log.i(tag, "[TEST E] Adding ${items.size} items to selectedFiles queue")
+                                selectedFiles = items
+
+                                Log.i(tag, "[TEST F] Starting Browser Receiver session in background...")
+                                withContext(Dispatchers.IO) {
+                                    app.transferManager.startBrowserSession(appSettings.deviceName, items)
+                                }
+                                Log.i(tag, "[TEST F] Browser Receiver session running successfully. Opening modal.")
+                                showBrowserModal = true
+                            } catch (t: Throwable) {
+                                Log.e(tag, "FATAL error in browserFilePicker processing pipeline: ${t.javaClass.simpleName}: ${t.message}", t)
+                                Toast.makeText(this@MainActivity, "Could not prepare files: ${t.message}", Toast.LENGTH_LONG).show()
+                            }
+                        }
                     }
                 }
 
@@ -214,10 +248,18 @@ class MainActivity : ComponentActivity() {
                                 targetDevice = selectedTargetDevice,
                                 selectedFiles = selectedFiles,
                                 onAddFiles = { uris ->
-                                    Log.i(tag, "SendScreen: onAddFiles callback received ${uris.size} URIs: $uris")
-                                    val newItems = uris.map { app.storageManager.queryFileMetadata(it) }
-                                    Log.i(tag, "onAddFiles successfully extracted ${newItems.size} items. Updating selectedFiles.")
-                                    selectedFiles = selectedFiles + newItems
+                                    Log.i(tag, "[SendScreen] onAddFiles callback received ${uris.size} URIs")
+                                    coroutineScope.launch {
+                                        try {
+                                            val newItems = withContext(Dispatchers.IO) {
+                                                uris.map { app.storageManager.processFileUriWithDiagnostics(it) }
+                                            }
+                                            Log.i(tag, "[TEST E] [SendScreen] Added ${newItems.size} items to selectedFiles.")
+                                            selectedFiles = selectedFiles + newItems
+                                        } catch (t: Throwable) {
+                                            Log.e(tag, "Error processing files in SendScreen: ${t.javaClass.simpleName}: ${t.message}", t)
+                                        }
+                                    }
                                 },
                                 onRemoveFile = { item ->
                                     selectedFiles = selectedFiles.filter { it.id != item.id }
@@ -227,8 +269,16 @@ class MainActivity : ComponentActivity() {
                                 onShareToBrowser = {
                                     if (selectedFiles.isNotEmpty()) {
                                         Log.i(tag, "SendScreen: onShareToBrowser with ${selectedFiles.size} files")
-                                        app.transferManager.startBrowserSession(appSettings.deviceName, selectedFiles)
-                                        showBrowserModal = true
+                                        coroutineScope.launch {
+                                            try {
+                                                withContext(Dispatchers.IO) {
+                                                    app.transferManager.startBrowserSession(appSettings.deviceName, selectedFiles)
+                                                }
+                                                showBrowserModal = true
+                                            } catch (t: Throwable) {
+                                                Log.e(tag, "Error starting browser session from SendScreen: ${t.javaClass.simpleName}: ${t.message}", t)
+                                            }
+                                        }
                                     }
                                 },
                                 onStartTransfer = {

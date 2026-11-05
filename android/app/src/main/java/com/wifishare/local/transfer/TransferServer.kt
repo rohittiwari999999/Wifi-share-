@@ -12,7 +12,7 @@ import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import io.ktor.server.application.*
 import io.ktor.server.engine.*
-import io.ktor.server.netty.*
+import io.ktor.server.cio.*
 import io.ktor.server.plugins.contentnegotiation.*
 import io.ktor.server.plugins.cors.routing.*
 import io.ktor.server.request.*
@@ -59,11 +59,11 @@ class TransferServer(
             currentDeviceName = name
         }
     }
-
     fun startServer(port: Int = DEFAULT_SERVER_PORT) {
         if (server != null) return
 
-        server = embeddedServer(Netty, port = port) {
+        try {
+            server = embeddedServer(CIO, port = port) {
             install(ContentNegotiation) {
                 json(Json {
                     ignoreUnknownKeys = true
@@ -285,9 +285,12 @@ class TransferServer(
                     _serverProgress.value = _serverProgress.value?.copy(state = TransferState.CANCELLED)
                     call.respond(HttpStatusCode.OK, "Transfer cancelled.")
                 }
-            }
-        }.start(wait = false)
-        Log.d(tag, "Ktor TransferServer started on port $port")
+                }
+            }.start(wait = false)
+            Log.d(tag, "Ktor TransferServer (CIO engine) started on port $port")
+        } catch (t: Throwable) {
+            Log.e(tag, "Error starting TransferServer on port $port: ${t.javaClass.simpleName}: ${t.message}", t)
+        }
     }
 
     /**

@@ -14,7 +14,7 @@ import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import io.ktor.server.application.*
 import io.ktor.server.engine.*
-import io.ktor.server.netty.*
+import io.ktor.server.cio.*
 import io.ktor.server.plugins.contentnegotiation.*
 import io.ktor.server.plugins.cors.routing.*
 import io.ktor.server.response.*
@@ -80,7 +80,7 @@ class BrowserReceiverServer(
         )
 
         try {
-            server = embeddedServer(Netty, port = actualPort, host = "0.0.0.0") {
+            server = embeddedServer(CIO, port = actualPort, host = "0.0.0.0") {
                 install(ContentNegotiation) {
                     json(Json {
                         ignoreUnknownKeys = true
@@ -333,9 +333,9 @@ class BrowserReceiverServer(
                     }
                 }
             }.start(wait = false)
-            Log.d(tag, "Browser receiver HTTP server running on port $actualPort")
-        } catch (e: Exception) {
-            Log.e(tag, "Failed to start BrowserReceiverServer on port $actualPort", e)
+            Log.d(tag, "Browser receiver HTTP server (CIO engine) running on port $actualPort")
+        } catch (t: Throwable) {
+            Log.e(tag, "Failed to start BrowserReceiverServer on port $actualPort: ${t.javaClass.simpleName}: ${t.message}", t)
         }
 
         return actualPort

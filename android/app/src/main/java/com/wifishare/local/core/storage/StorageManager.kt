@@ -27,158 +27,188 @@ class StorageManager(private val context: Context) {
      * Extracts metadata (name, size, mimeType) from a content Uri using SAF or MediaStore.
      * Guaranteed to return a valid FileTransferItem and never throw an unhandled exception.
      */
-    fun queryFileMetadata(uri: Uri): FileTransferItem {
-        Log.i(tag, "--> queryFileMetadata invoked for URI: $uri [scheme=${uri.scheme}, authority=${uri.authority}]")
+    /**
+     * Staged diagnostic file processing implementing TEST A, B, C, D on Dispatchers.IO.
+     * Fully safe against SecurityException, IOException, IllegalArgumentException, and nulls.
+     */
+    suspend fun processFileUriWithDiagnostics(uri: Uri): FileTransferItem = withContext(Dispatchers.IO) {
+        val uriStr = uri.toString()
+        
+        // TEST A: Receive selected URI and log its string representation. Do not open it.
+        Log.i(tag, "[TEST A] Received selected URI: $uriStr [scheme=${uri.scheme}, authority=${uri.authority}, path=${uri.path}]")
 
-        return try {
-            // Safely attempt to take persistable URI permission
-            try {
-                context.contentResolver.takePersistableUriPermission(
-                    uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION
-                )
-                Log.d(tag, "Persistable URI permission acquired for: $uri")
-            } catch (ignored: Exception) {
-                // Expected for transient or gallery picker URIs
+        // Safely attempt persistable URI permission grant (expected to throw SecurityException for photo picker)
+        try {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+            Log.d(tag, "[TEST A] Persistable URI permission acquired for: $uriStr")
+        } catch (se: SecurityException) {
+            Log.d(tag, "[TEST A] Persistable URI permission not granted (expected for photo picker): ${se.message}")
+        } catch (ignored: Throwable) {
+        }
+
+        // TEST B: Read MIME type using ContentResolver.getType(uri)
+        var mimeType = "application/octet-stream"
+        try {
+            val resolved = contentResolver.getType(uri)
+            if (!resolved.isNullOrBlank()) {
+                mimeType = resolved
             }
+            Log.i(tag, "[TEST B] Read MIME type via contentResolver.getType: '$mimeType' for URI: $uriStr")
+        } catch (t: Throwable) {
+            Log.w(tag, "[TEST B] Exception reading MIME type for URI: $uriStr: ${t.javaClass.simpleName}: ${t.message}", t)
+        }
 
+        // TEST C: Read display name and size safely using OpenableColumns
+        var displayName = "photo_${System.currentTimeMillis()}"
+        var fileSize = 0L
+
+        try {
+            val projection = arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE)
+            contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val nameIdx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (nameIdx != -1 && !cursor.isNull(nameIdx)) {
+                        val n = cursor.getString(nameIdx)
+                        if (!n.isNullOrBlank()) {
+                            displayName = n
+                            Log.d(tag, "[TEST C] Resolved DISPLAY_NAME from cursor: '$displayName'")
+                        }
+                    }
+                    val sizeIdx = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    if (sizeIdx != -1 && !cursor.isNull(sizeIdx)) {
+                        val s = cursor.getLong(sizeIdx)
+                        if (s > 0L) {
+                            fileSize = s
+                            Log.d(tag, "[TEST C] Resolved SIZE from cursor: $fileSize bytes")
+                        }
+                    }
+                }
+            }
+            Log.i(tag, "[TEST C] Result from OpenableColumns: name='$displayName', size=$fileSize B")
+        } catch (t: Throwable) {
+            Log.w(tag, "[TEST C] OpenableColumns cursor query failed for $uriStr: ${t.javaClass.simpleName}: ${t.message}", t)
+        }
+
+        // Fallback size probes if 0
+        if (fileSize <= 0L) {
+            try {
+                contentResolver.openAssetFileDescriptor(uri, "r")?.use { afd ->
+                    val len = afd.length
+                    if (len > 0L) {
+                        fileSize = len
+                        Log.d(tag, "[TEST C-Fallback] Resolved size via openAssetFileDescriptor: $fileSize bytes")
+                    }
+                }
+            } catch (ignored: Throwable) {}
+        }
+        if (fileSize <= 0L) {
+            try {
+                contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                    val statSize = pfd.statSize
+                    if (statSize > 0L) {
+                        fileSize = statSize
+                        Log.d(tag, "[TEST C-Fallback] Resolved size via openFileDescriptor: $fileSize bytes")
+                    }
+                }
+            } catch (ignored: Throwable) {}
+        }
+
+        // Fallback display name resolution
+        if (displayName.startsWith("photo_") || displayName.startsWith("file_")) {
+            val lastSegment = uri.lastPathSegment
+            if (!lastSegment.isNullOrBlank()) {
+                val clean = lastSegment.substringAfterLast('/')
+                if (clean.isNotBlank() && clean.contains('.')) {
+                    displayName = clean
+                    Log.d(tag, "[TEST C-Fallback] Fallback name from URI path: '$displayName'")
+                }
+            }
+        }
+        if (!displayName.contains('.')) {
+            val ext = MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType)
+            displayName = when {
+                !ext.isNullOrBlank() -> "$displayName.$ext"
+                mimeType.startsWith("image/") -> "$displayName.jpg"
+                mimeType.startsWith("video/") -> "$displayName.mp4"
+                mimeType.startsWith("audio/") -> "$displayName.mp3"
+                else -> "$displayName.bin"
+            }
+        }
+        val sanitizedName = HashUtils.sanitizeFileName(displayName)
+
+        // TEST D: Open ContentResolver.openInputStream(uri), read a small buffer and close it
+        try {
+            contentResolver.openInputStream(uri)?.use { stream ->
+                val testBuffer = ByteArray(64)
+                val bytesRead = stream.read(testBuffer)
+                Log.i(tag, "[TEST D] Successfully opened InputStream and read test buffer: $bytesRead bytes read from URI: $uriStr")
+            } ?: Log.w(tag, "[TEST D] openInputStream returned null for URI: $uriStr")
+        } catch (t: Throwable) {
+            Log.w(tag, "[TEST D] Exception opening/reading InputStream for URI: $uriStr: ${t.javaClass.simpleName}: ${t.message}", t)
+        }
+
+        val item = FileTransferItem(
+            id = UUID.randomUUID().toString(),
+            name = sanitizedName,
+            size = fileSize,
+            mimeType = mimeType,
+            uriString = uriStr
+        )
+        Log.i(tag, "<-- Diagnostic pipeline produced FileTransferItem: name='${item.name}', size=${item.size} B, mime='${item.mimeType}', id=${item.id}")
+        return@withContext item
+    }
+
+    /**
+     * Extracts metadata (name, size, mimeType) from a content Uri.
+     */
+    fun queryFileMetadata(uri: Uri): FileTransferItem {
+        return try {
+            val uriStr = uri.toString()
             var name = "file_${System.currentTimeMillis()}"
             var size = 0L
 
-            // Safely resolve MIME type
             val mimeType = try {
                 contentResolver.getType(uri) ?: "application/octet-stream"
-            } catch (e: Exception) {
-                Log.w(tag, "contentResolver.getType failed: ${e.message}")
+            } catch (e: Throwable) {
                 "application/octet-stream"
             }
 
-            // 1. Query OpenableColumns
-            val openableProjection = arrayOf(
-                OpenableColumns.DISPLAY_NAME,
-                OpenableColumns.SIZE
-            )
-
             try {
-                contentResolver.query(uri, openableProjection, null, null, null)?.use { cursor ->
+                contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { cursor ->
                     if (cursor.moveToFirst()) {
                         val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
                         val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
-
                         if (nameIndex != -1 && !cursor.isNull(nameIndex)) {
-                            try {
-                                val extractedName = cursor.getString(nameIndex)
-                                if (!extractedName.isNullOrBlank()) {
-                                    name = extractedName
-                                    Log.d(tag, "Resolved display name from cursor: $name")
-                                }
-                            } catch (e: Exception) {
-                                Log.w(tag, "Failed reading display name column: ${e.message}")
-                            }
+                            val extracted = cursor.getString(nameIndex)
+                            if (!extracted.isNullOrBlank()) name = extracted
                         }
-
                         if (sizeIndex != -1 && !cursor.isNull(sizeIndex)) {
-                            try {
-                                val extractedSize = cursor.getLong(sizeIndex)
-                                if (extractedSize > 0L) {
-                                    size = extractedSize
-                                    Log.d(tag, "Resolved size from cursor: $size bytes")
-                                }
-                            } catch (e: Exception) {
-                                Log.w(tag, "Failed reading size column: ${e.message}")
-                            }
+                            val extractedSize = cursor.getLong(sizeIndex)
+                            if (extractedSize > 0L) size = extractedSize
                         }
                     }
                 }
-            } catch (t: Throwable) {
-                Log.w(tag, "OpenableColumns cursor query failed for $uri: ${t.message}")
-            }
+            } catch (ignored: Throwable) {}
 
-            // 2. Fallback probe: AssetFileDescriptor (highly compatible with MediaStore / Photos)
-            if (size <= 0L) {
-                try {
-                    contentResolver.openAssetFileDescriptor(uri, "r")?.use { afd ->
-                        val len = afd.length
-                        if (len > 0L) {
-                            size = len
-                            Log.d(tag, "Resolved size via openAssetFileDescriptor: $size bytes")
-                        }
-                    }
-                } catch (ignored: Exception) {
-                }
-            }
-
-            // 3. Fallback probe: ParcelFileDescriptor
-            if (size <= 0L) {
-                try {
-                    contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
-                        val statSize = pfd.statSize
-                        if (statSize > 0L) {
-                            size = statSize
-                            Log.d(tag, "Resolved size via openFileDescriptor: $size bytes")
-                        }
-                    }
-                } catch (ignored: Exception) {
-                }
-            }
-
-            // 4. Fallback probe: InputStream available bytes
-            if (size <= 0L) {
-                try {
-                    contentResolver.openInputStream(uri)?.use { stream ->
-                        val available = stream.available().toLong()
-                        if (available > 0L) {
-                            size = available
-                            Log.d(tag, "Estimated size via stream.available(): $size bytes")
-                        }
-                    }
-                } catch (ignored: Exception) {
-                }
-            }
-
-            // 5. Fallback name from URI path if still default
-            if (name.startsWith("file_") || name.startsWith("unknown_file_")) {
-                val lastSegment = uri.lastPathSegment
-                if (!lastSegment.isNullOrBlank()) {
-                    val cleanSegment = lastSegment.substringAfterLast('/')
-                    if (cleanSegment.isNotBlank() && cleanSegment.contains('.')) {
-                        name = cleanSegment
-                        Log.d(tag, "Fallback name extracted from URI path: $name")
-                    }
-                }
-            }
-
-            // 6. Ensure extension is present
             if (!name.contains('.')) {
                 val ext = MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType)
-                if (!ext.isNullOrBlank()) {
-                    name = "$name.$ext"
-                } else if (mimeType.startsWith("image/")) {
-                    name = "$name.jpg"
-                } else if (mimeType.startsWith("video/")) {
-                    name = "$name.mp4"
-                } else if (mimeType.startsWith("audio/")) {
-                    name = "$name.mp3"
-                }
+                name = if (!ext.isNullOrBlank()) "$name.$ext" else "$name.jpg"
             }
 
-            val sanitizedName = HashUtils.sanitizeFileName(name)
-            val fileItem = FileTransferItem(
-                id = UUID.randomUUID().toString(),
-                name = sanitizedName,
-                size = size,
-                mimeType = mimeType,
-                uriString = uri.toString()
-            )
-
-            Log.i(tag, "<-- Successfully extracted FileTransferItem: name=${fileItem.name}, size=${fileItem.size} B, mime=${fileItem.mimeType}")
-            fileItem
-        } catch (t: Throwable) {
-            Log.e(tag, "Outer exception in queryFileMetadata for URI: $uri, returning fallback item", t)
-            val fallbackName = HashUtils.sanitizeFileName(uri.lastPathSegment?.substringAfterLast('/') ?: "image_${System.currentTimeMillis()}.jpg")
             FileTransferItem(
                 id = UUID.randomUUID().toString(),
-                name = fallbackName,
+                name = HashUtils.sanitizeFileName(name),
+                size = size,
+                mimeType = mimeType,
+                uriString = uriStr
+            )
+        } catch (t: Throwable) {
+            FileTransferItem(
+                id = UUID.randomUUID().toString(),
+                name = "file_${System.currentTimeMillis()}.jpg",
                 size = 0L,
                 mimeType = "image/jpeg",
                 uriString = uri.toString()
